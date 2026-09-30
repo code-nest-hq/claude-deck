@@ -14,6 +14,7 @@ import { McpCard } from './McpCard';
 import { matchCommands, SlashMenu } from './SlashMenu';
 import { ShellCard } from './ShellCard';
 import { SkillsModal } from './SkillsModal';
+import { StatusModal } from './StatusModal';
 import { ToolCard } from './ToolCard';
 
 const STUCK_MS = 60_000;
@@ -134,6 +135,7 @@ export function Chat() {
   const [now, setNow] = useState(Date.now());
   const [sel, setSel] = useState(0);
   const [dismissed, setDismissed] = useState(false);
+  const [statusOpen, setStatusOpen] = useState(false);
   const end = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const mirror = useRef<HTMLDivElement>(null);
@@ -220,6 +222,7 @@ export function Chat() {
           >
             {refresh.state === 'loading' ? 'Refreshing…' : refresh.state === 'done' ? 'Refreshed ✓' : refresh.state === 'error' ? 'Refresh failed' : 'Refresh'}
           </button>
+          {project && <button className="rounded-md border border-zinc-800 px-2.5 py-1 text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-900" title="ID, path, modelo e uso desta sessão" onClick={() => setStatusOpen(true)}>Status</button>}
           <button className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs transition-colors ${ui.term ? 'border-zinc-700 bg-zinc-900 text-zinc-100' : 'border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-900'}`} title="Subagentes e comandos ! (Ctrl+J)" onClick={() => setUi({ term: !ui.term })}>Terminal</button>
         </div>
       </header>
@@ -262,6 +265,7 @@ export function Chat() {
         const q = chat.pending.find(isAskUserQuestion);
         return q ? <AskUserQuestionModal p={q} onAnswer={(allow, updatedInput) => answer(q.reqId, allow, updatedInput)} /> : null;
       })()}
+      {statusOpen && project && <StatusModal sessionId={active.sessionId} name={name} project={project} config={config} chat={chat} onClose={() => setStatusOpen(false)} />}
       <AutoCompactModal key={active.sessionId} sessionId={active.sessionId} chat={chat} enabled={!!project?.autoCompact} onCompact={() => send('/compact', false)} />
 
       <div className="relative border-t border-zinc-800/70 bg-zinc-950 p-3">

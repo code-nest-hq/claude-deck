@@ -4,10 +4,10 @@ import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import {
   createConnectionBody, createProfileBody, createProjectBody, createSessionBody, lastConnectionBody, loginCodeBody, patchConfigBody, patchProjectBody, patchSessionBody, uuidSchema,
-  type Connection, type Project, type SessionMeta, type SlashCommandInfo,
+  type Connection, type Project, type SessionMeta, type SessionStatus, type SlashCommandInfo,
 } from '@ccui/shared';
 import { versionWarning, type Connections } from './connections';
-import { ensureMeta, listProjectSessions } from './domain';
+import { ensureMeta, listProjectSessions, openSpecFor } from './domain';
 import { parseGitStatus } from './git';
 import { logDay, logDays, readLogs } from './logs';
 import { activate, DEFAULT_PROFILE, knownProfile, listProfiles, logout, removeProfile, sendCode, startLogin, usageFor } from './profiles';
@@ -228,6 +228,15 @@ export function buildApi({ store, hub, conns }: Deps) {
       if (r === 'busy') return c.json({ error: 'wait for the current turn to finish' }, 409);
       return c.json({ live: !!r, ...(r ?? {}) });
     } catch (e) { return bad(c, (e as Error).message); }
+  });
+
+  // Status modal: effective settings resolved exactly like the process opens (openSpecFor)
+  api.get('/projects/:id/sessions/:sid/status', (c) => {
+    const sid = uuidSchema.safeParse(c.req.param('sid'));
+    const meta = sid.success ? store.sessions.data.sessions.find((s) => s.sessionId === sid.data && s.projectId === c.req.param('id')) : undefined;
+    if (!meta) return c.json({ error: 'projeto/sessão desconhecido' }, 404);
+    const { cwd: _cwd, ...spec } = openSpecFor(store, meta.sessionId);
+    return c.json({ meta, live: hub.isLive(meta.sessionId), ...spec } satisfies SessionStatus);
   });
 
   // branch/status do Git do projeto (null quando não é um repositório ou o servidor não responde)

@@ -33,6 +33,11 @@ export interface ProfileView {
   credentials: { expiresAt?: number; refreshTokenExpiresAt?: number; scopes?: string[]; subscriptionType?: string; rateLimitTier?: string } | null;
   login: { running: boolean; url?: string; output: string } | null;
 }
+/** Status modal: the session's meta plus the effective settings its process opens with (session > project > global defaults) */
+export interface SessionStatus {
+  meta: SessionMeta; live: boolean;
+  model: Model; effort: Effort; routing: boolean; lean: boolean; permissionMode: 'default' | 'plan' | 'bypassPermissions';
+}
 export interface SessionRow { sessionId: string; name: string; lastModified: number; live: boolean; tags: string[]; favorite: boolean; archived: boolean }
 export interface SlashCommandInfo { name: string; description: string; argumentHint: string; aliases?: string[]; builtin: boolean }
 export interface GitInfo { branch: string | null; ahead: number; behind: number; changed: number; untracked: number }

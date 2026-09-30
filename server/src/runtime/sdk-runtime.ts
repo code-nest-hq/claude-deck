@@ -5,7 +5,7 @@ import { EFFORTS, MODELS, type EventBody, type HistoryItem, type McpAction, type
 import { z } from 'zod';
 import { visibleCommands } from '../commands';
 import { mapMessage } from './events';
-import { classifyHeuristic, CLASSIFY_SYSTEM_PROMPT } from './routing';
+import { classifyHeuristic, CLASSIFY_SYSTEM_PROMPT, learnedRoute, learnRoute } from './routing';
 import type { ClaudeRuntime, LiveSession, OpenOptions, SessionInfo, Transport } from './types';
 
 const PERMISSION_TIMEOUT_MS = 10 * 60_000;
@@ -256,10 +256,15 @@ export class SdkRuntime implements ClaudeRuntime {
   usage(sessionId: string, cwd: string): Promise<{ totals: UsageTotals; modelUsage: Record<string, ModelUsage> } | null> { return this.transport.usage(sessionId, cwd); }
 
   async classify(cwd: string, text: string): Promise<Model> {
-    return classifyHeuristic(text) ?? this.classifyViaHaiku(cwd, text);
+    const known = classifyHeuristic(text) ?? learnedRoute(text);
+    if (known) return known;
+    const model = await this.classifyViaHaiku(cwd, text);
+    if (!model) return 'sonnet'; // failure/timeout: bigger model, and nothing learned from it
+    learnRoute(text, model);
+    return model;
   }
 
-  private async classifyViaHaiku(cwd: string, text: string): Promise<Model> {
+  private async classifyViaHaiku(cwd: string, text: string): Promise<Model | null> {
     const input = channel<SDKUserMessage>();
     const q = query({
       prompt: input,
@@ -276,9 +281,10 @@ export class SdkRuntime implements ClaudeRuntime {
     try {
       const timeout = new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error('timeout ao classificar')), CLASSIFY_TIMEOUT_MS); });
       const answer = await Promise.race([firstAssistantText(q), timeout]);
+      if (!answer.trim()) return null;
       return /\bhaiku\b/i.test(answer) ? 'haiku' : 'sonnet';
     } catch {
-      return 'sonnet'; // falha/ambíguo: vai pro modelo maior, nunca pro barato
+      return null; // failure: the caller falls back to Sonnet, never to the cheap model
     } finally {
       clearTimeout(timer);
       q.close();

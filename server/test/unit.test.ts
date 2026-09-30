@@ -13,7 +13,7 @@ import { fakeRuntime, recorder, type FakeLive } from './fakes';
 process.env.CCUI_DATA_DIR = mkdtempSync(path.join(tmpdir(), 'ccui-test-data-'));
 const { SessionHub } = await import('../src/hub');
 const { logDay, logDays, readLogs, logError } = await import('../src/logs');
-const { classifyHeuristic } = await import('../src/runtime/routing');
+const { classifyHeuristic, learnedRoute, learnRoute } = await import('../src/runtime/routing');
 const { mapMessage } = await import('../src/runtime/events');
 const { localTransport } = await import('../src/runtime/local-transport');
 const { encodeCwd } = await import('../src/ssh-util');
@@ -47,12 +47,25 @@ describe('Model Routing heuristic', () => {
     ['', 'haiku'],
     ['x'.repeat(401), 'sonnet'], // long prompt: likely a big task
     ['por que o céu é azul?', null], // gray zone: decided by the Haiku classifier
+    // commit message over a diff already in context: text generation, not coding
+    ['generate commit message', 'haiku'],
+    ['cria a mensagem de commit', 'haiku'],
   ];
   for (const [text, want] of cases) {
     test(`${JSON.stringify(text.slice(0, 50))} -> ${want ?? 'classifier'}`, () => assert.equal(classifyHeuristic(text), want));
   }
   test('a question that asks to build something goes to Sonnet (cost only saved when it is safe)', () => {
     assert.equal(classifyHeuristic('explica e depois implementa o cache'), 'sonnet');
+  });
+  test('learned routes: normalized lookup, persisted to the data dir, long prompts not stored', async () => {
+    assert.equal(learnedRoute('roda os testes'), null);
+    learnRoute('Roda   os testes!', 'haiku');
+    assert.equal(learnedRoute('roda os testes'), 'haiku');
+    learnRoute('y'.repeat(201), 'sonnet');
+    assert.equal(learnedRoute('y'.repeat(201)), null);
+    await new Promise((r) => setTimeout(r, 50));
+    const file = JSON.parse(readFileSync(path.join(process.env.CCUI_DATA_DIR!, 'routing-learned.json'), 'utf8'));
+    assert.deepEqual(file, { 'roda os testes': 'haiku' });
   });
 });
 
