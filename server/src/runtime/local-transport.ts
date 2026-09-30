@@ -46,6 +46,19 @@ export const localTransport: Transport = {
     } catch { return null; }
   },
 
+  async tailFile(p, bytes) {
+    try {
+      const f = await fs.open(p, 'r');
+      try {
+        const { size } = await f.stat();
+        const len = Math.min(size, bytes);
+        const buf = Buffer.alloc(len);
+        await f.read(buf, 0, len, size - len);
+        return buf.toString('utf8');
+      } finally { await f.close(); }
+    } catch { return null; }
+  },
+
   async listSessions(cwd) {
     const list = await listSessions({ dir: cwd });
     return list.map((s) => ({ sessionId: s.sessionId, summary: s.summary, customTitle: s.customTitle, firstPrompt: s.firstPrompt, lastModified: s.lastModified }));

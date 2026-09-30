@@ -14,6 +14,7 @@ import { McpCard } from './McpCard';
 import { matchCommands, SlashMenu } from './SlashMenu';
 import { ShellCard } from './ShellCard';
 import { SkillsModal } from './SkillsModal';
+import { BgTasksModal } from './BgTasksModal';
 import { StatusModal } from './StatusModal';
 import { ToolCard } from './ToolCard';
 
@@ -136,6 +137,7 @@ export function Chat() {
   const [sel, setSel] = useState(0);
   const [dismissed, setDismissed] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
+  const [bgOpen, setBgOpen] = useState(false);
   const end = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const mirror = useRef<HTMLDivElement>(null);
@@ -222,6 +224,16 @@ export function Chat() {
           >
             {refresh.state === 'loading' ? 'Refreshing…' : refresh.state === 'done' ? 'Refreshed ✓' : refresh.state === 'error' ? 'Refresh failed' : 'Refresh'}
           </button>
+          {chat.bgTasks.length > 0 && (() => {
+            const running = chat.bgTasks.filter((t) => t.status === 'running').length;
+            return (
+              <button
+                className={`rounded-md border px-2.5 py-1 text-xs transition-colors ${running ? 'border-amber-500/40 text-amber-300 hover:bg-amber-500/10' : 'border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-900'}`}
+                title="Tarefas que o Claude deixou rodando em background"
+                onClick={() => setBgOpen(true)}
+              >{running ? `● Background ${running}` : 'Background'}</button>
+            );
+          })()}
           {project && <button className="rounded-md border border-zinc-800 px-2.5 py-1 text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-900" title="ID, path, modelo e uso desta sessão" onClick={() => setStatusOpen(true)}>Status</button>}
           <button className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs transition-colors ${ui.term ? 'border-zinc-700 bg-zinc-900 text-zinc-100' : 'border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-900'}`} title="Subagentes e comandos ! (Ctrl+J)" onClick={() => setUi({ term: !ui.term })}>Terminal</button>
         </div>
@@ -265,6 +277,7 @@ export function Chat() {
         const q = chat.pending.find(isAskUserQuestion);
         return q ? <AskUserQuestionModal p={q} onAnswer={(allow, updatedInput) => answer(q.reqId, allow, updatedInput)} /> : null;
       })()}
+      {bgOpen && <BgTasksModal projectId={active.projectId} sessionId={active.sessionId} chat={chat} onClose={() => setBgOpen(false)} />}
       {statusOpen && project && <StatusModal sessionId={active.sessionId} name={name} project={project} config={config} chat={chat} onClose={() => setStatusOpen(false)} />}
       <AutoCompactModal key={active.sessionId} sessionId={active.sessionId} chat={chat} enabled={!!project?.autoCompact} onCompact={() => send('/compact', false)} />
 

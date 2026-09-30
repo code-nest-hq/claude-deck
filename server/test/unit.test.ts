@@ -15,6 +15,7 @@ const { SessionHub } = await import('../src/hub');
 const { logDay, logDays, readLogs, logError } = await import('../src/logs');
 const { classifyHeuristic, learnedRoute, learnRoute } = await import('../src/runtime/routing');
 const { mapMessage } = await import('../src/runtime/events');
+const { BgTasks } = await import('../src/runtime/bg-tasks');
 const { localTransport } = await import('../src/runtime/local-transport');
 const { encodeCwd } = await import('../src/ssh-util');
 
@@ -127,6 +128,34 @@ describe('SessionHub send (fake runtime)', () => {
     assert.equal(await h.hub.send(h.id, 'two'), 'busy');
   });
 
+  // a finished background task makes the CLI start a turn by itself (no send()): the session must show it as running
+  test('a turn started by the CLI (task notification) goes running, then idle', async () => {
+    const rt = fakeRuntime();
+    const h = hubWith(rt, false);
+    await h.attach();
+    await h.hub.send(h.id, 'one');
+    await h.waitFor((e) => e.type === 'turn.completed');
+    const seq = h.events().length;
+    rt.lives[0].reply('suite passed');
+    await h.waitFor((e) => e.type === 'turn.completed' && e.seq > seq);
+    const states = h.events().slice(seq).flatMap((e) => (e.type === 'session.state' ? [e.state] : []));
+    assert.deepEqual(states, ['running', 'idle']);
+  });
+
+  test('bg.tasks list is kept for the snapshot', async () => {
+    const rt = fakeRuntime();
+    const h = hubWith(rt, false);
+    await h.attach();
+    await h.hub.send(h.id, 'one');
+    const task = { taskId: 'b1', kind: 'local_bash', description: 'tests', status: 'running' as const, startedAt: 1 };
+    rt.lives[0].out.push({ type: 'bg.tasks', tasks: [task] });
+    await h.waitFor((e) => e.type === 'bg.tasks');
+    const r = recorder();
+    await h.hub.attach(r.client, h.id);
+    const snap = r.msgs.find((m) => m.type === 'snapshot');
+    assert.deepEqual(snap?.type === 'snapshot' && snap.bgTasks, [task]);
+  });
+
   // regression: "Cannot read properties of null (reading 'setModel')"
   test('process exiting during the classifier call: a new one is opened and the message still goes out', async () => {
     let release!: (m: Model) => void;
@@ -208,6 +237,39 @@ describe('SDK message mapping', () => {
     const r = map({ type: 'result', subtype: 'success', is_error: false, result: 'hi', total_cost_usd: 0.5, usage: { input_tokens: 1, output_tokens: 2, cache_creation_input_tokens: 3, cache_read_input_tokens: 4 }, modelUsage: {} });
     assert.equal(r[0].type, 'turn.completed');
     assert.equal(r.length, 1);
+  });
+});
+
+describe('background tasks tracker', () => {
+  const sys = (m: object) => ({ type: 'system', ...m }) as unknown as SDKMessage;
+  test('backgrounded Bash: listed, output file from the placeholder result, ends on notification', () => {
+    const bg = new BgTasks();
+    assert.equal(bg.apply(sys({ subtype: 'task_started', task_id: 'b1', tool_use_id: 'tu1', task_type: 'local_bash', description: 'Run suite', is_backgrounded: true })), true);
+    bg.toolResult('tu1', 'Command running in background with ID: b1. Output is being written to: /tmp/x/tasks/b1.output');
+    assert.equal(bg.outputFile('b1'), '/tmp/x/tasks/b1.output');
+    assert.equal(bg.list()[0].status, 'running');
+    assert.equal(bg.apply(sys({ subtype: 'task_notification', task_id: 'b1', status: 'completed', output_file: '/tmp/x/tasks/b1.output', summary: 'exit 0' })), true);
+    const [t] = bg.list();
+    assert.equal(t.status, 'completed');
+    assert.equal(t.summary, 'exit 0');
+    assert.ok(t.endedAt);
+    assert.equal('outputFile' in t, false); // the path never goes to the client
+  });
+  test('foreground and ambient tasks are not listed; backgrounding later lists it; exit stops running ones', () => {
+    const bg = new BgTasks();
+    assert.equal(bg.apply(sys({ subtype: 'task_started', task_id: 'a1', tool_use_id: 'tu2', task_type: 'local_agent', description: 'agent' })), false);
+    assert.equal(bg.apply(sys({ subtype: 'task_started', task_id: 'm1', task_type: 'monitor', description: 'watch', ambient: true })), false);
+    assert.deepEqual(bg.list(), []);
+    assert.equal(bg.apply(sys({ subtype: 'task_updated', task_id: 'a1', patch: { is_backgrounded: true } })), true);
+    assert.equal(bg.apply(sys({ subtype: 'background_tasks_changed', tasks: [{ task_id: 'a1', task_type: 'local_agent', description: 'agent' }] })), false);
+    assert.equal(bg.stopAll(), true);
+    assert.deepEqual(bg.list().map((t) => [t.taskId, t.status]), [['a1', 'stopped']]);
+  });
+  test('live set before task_started (real SDK order): stays listed and gets the tool_use_id', () => {
+    const bg = new BgTasks();
+    assert.equal(bg.apply(sys({ subtype: 'background_tasks_changed', tasks: [{ task_id: 'b2', task_type: 'local_bash', description: 'sleep' }] })), true);
+    bg.apply(sys({ subtype: 'task_started', task_id: 'b2', tool_use_id: 'tu3', task_type: 'local_bash', description: 'sleep' }));
+    assert.deepEqual(bg.list().map((t) => [t.taskId, t.toolUseId]), [['b2', 'tu3']]);
   });
 });
 

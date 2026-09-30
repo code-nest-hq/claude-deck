@@ -93,6 +93,11 @@ export const lastConnectionBody = z.object({ connectionId: z.string().min(1) });
 // ---- eventos (contrato único entre backend e React) ----
 export type SessionState = 'idle' | 'running' | 'awaiting_permission' | 'exited';
 export interface PendingPermission { reqId: string; toolName: string; input: unknown }
+// a task Claude left running in the background (Bash run_in_background, backgrounded subagent, monitor...); taskId = SDK task_id
+export interface BgTask {
+  taskId: string; toolUseId?: string; kind: string; description: string;
+  status: 'running' | 'completed' | 'failed' | 'stopped'; startedAt: number; endedAt?: number; summary?: string;
+}
 export type EventBody =
   | { type: 'session.state'; state: SessionState }
   | { type: 'user.message'; text: string }
@@ -103,6 +108,8 @@ export type EventBody =
   // subagente (Task tool): taskId = tool_use_id do Task tool. Só 1º nível vira aba no cliente.
   | { type: 'task.started'; taskId: string; subagentType?: string; description: string }
   | { type: 'task.updated'; taskId: string; status: 'pending' | 'running' | 'completed' | 'failed' | 'killed' | 'paused' }
+  // full list of the session's background tasks (REPLACE semantics); running ones become 'stopped' when the process exits
+  | { type: 'bg.tasks'; tasks: BgTask[] }
   | { type: 'routing.started' }
   | { type: 'model.routed'; model: Model }
   | ({ type: 'permission.requested' } & PendingPermission)
@@ -163,7 +170,7 @@ export type ClientMsgT = z.infer<typeof ClientMsg>;
 
 export type ServerMsg =
   | { type: 'ready' }
-  | { type: 'snapshot'; sessionId: string; history: HistoryItem[]; state: SessionState; lastSeq: number; totals: UsageTotals; pending: PendingPermission[] }
+  | { type: 'snapshot'; sessionId: string; history: HistoryItem[]; state: SessionState; lastSeq: number; totals: UsageTotals; pending: PendingPermission[]; bgTasks: BgTask[] }
   | { type: 'event'; event: ClaudeEvent }
   | { type: 'error'; code: string; message: string; errorId?: string }
   | { type: 'log'; entry: LogEntry }

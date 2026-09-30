@@ -12,6 +12,8 @@ export interface Transport {
   listDir(path: string | null): Promise<{ path: string; entries: DirEntry[] } | null>;
   /** lê um arquivo inteiro em base64; null se não existe/não é arquivo/sem permissão/maior que maxBytes */
   readFile(path: string, maxBytes: number): Promise<string | null>;
+  /** last `bytes` of a text file (background task output); null if missing/unreadable */
+  tailFile(path: string, bytes: number): Promise<string | null>;
   listSessions(cwd: string): Promise<SessionInfo[]>;
   history(sessionId: string, cwd: string): Promise<HistoryItem[]>;
   sessionExists(sessionId: string, cwd: string): Promise<boolean>;
@@ -38,6 +40,9 @@ export interface LiveSession {
   mcp(action?: McpAction): Promise<{ servers: McpServerView[]; error?: string }>;
   /** re-reads skills and plugins from disk into the running process (new skills, installed plugins, their MCP servers) */
   reload(): Promise<{ plugins: number; errors: number }>;
+  /** tail of a background task's output file; null when unknown (no output file yet) or unreadable */
+  bgOutput(taskId: string): Promise<string | null>;
+  stopTask(taskId: string): Promise<void>;
   close(): Promise<void>;
   events: AsyncIterable<EventBody>;
 }

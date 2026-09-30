@@ -46,6 +46,11 @@ export function sshTransport(conn: { target: string; claudePath?: string }): Tra
       return r.code === 0 ? r.stdout.trim() : null;
     },
 
+    async tailFile(p, bytes) {
+      const r = await sh(`tail -c ${Math.floor(bytes)} ${shq(p)}`);
+      return r.code === 0 ? r.stdout : null;
+    },
+
     async listSessions(cwd) {
       const r = await sh(`cd ${dir(cwd)} 2>/dev/null && stat -c '%Y %n' -- *.jsonl 2>/dev/null`);
       const files = r.stdout.split('\n').flatMap((l) => {

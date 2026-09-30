@@ -1,4 +1,4 @@
-import { ZERO_TOTALS, type ClaudeEvent, type McpServerView, type Model, type ModelUsage, type PendingPermission, type ServerMsg, type SessionState, type UsageTotals } from '@ccui/shared';
+import { ZERO_TOTALS, type BgTask, type ClaudeEvent, type McpServerView, type Model, type ModelUsage, type PendingPermission, type ServerMsg, type SessionState, type UsageTotals } from '@ccui/shared';
 
 export type Item =
   | { kind: 'user'; text: string; routedModel?: Model }
@@ -27,6 +27,7 @@ export interface Chat {
   pending: PendingPermission[];
   lastEventAt: number;
   tasks: TaskEntry[];
+  bgTasks: BgTask[]; // background tasks (Background modal); from the snapshot, then replaced by each bg.tasks
   pendingRoutedModel?: Model; // "prateleira" pro modelo escolhido; consumido pelo próximo user.message
   turnPhase: 'idle' | 'routing' | 'thinking'; // indicador de progresso enquanto não chega nenhum conteúdo do turno
   turnPhaseAt: number;
@@ -35,7 +36,7 @@ export interface Chat {
   compact?: { phase: 'running' | 'done' | 'failed'; startedAt: number; seq: number; preTokens?: number; postTokens?: number; message?: string };
 }
 
-export const emptyChat = (): Chat => ({ hydrated: false, items: [], state: 'idle', lastSeq: 0, totals: ZERO_TOTALS, pending: [], lastEventAt: Date.now(), tasks: [], turnPhase: 'idle', turnPhaseAt: 0 });
+export const emptyChat = (): Chat => ({ hydrated: false, items: [], state: 'idle', lastSeq: 0, totals: ZERO_TOTALS, pending: [], lastEventAt: Date.now(), tasks: [], bgTasks: [], turnPhase: 'idle', turnPhaseAt: 0 });
 
 export function applySnapshot(s: Extract<ServerMsg, { type: 'snapshot' }>): Chat {
   return {
@@ -46,6 +47,7 @@ export function applySnapshot(s: Extract<ServerMsg, { type: 'snapshot' }>): Chat
     totals: s.totals,
     pending: s.pending,
     lastEventAt: Date.now(),
+    bgTasks: s.bgTasks,
     tasks: [], // subagentes não persistem entre reconexões (fora de escopo, ver spec)
     turnPhase: 'idle',
     turnPhaseAt: 0,
@@ -163,6 +165,9 @@ export function applyEvent(c: Chat, ev: ClaudeEvent): Chat {
       next.lastTokens = { input: ev.inputTokens, output: ev.outputTokens, cacheCreation: ev.cacheCreationTokens, cacheRead: ev.cacheReadTokens };
       // resumo só deste turno (com modelo usado); mostrado no terminal, não na conversa principal (ItemView ignora 'turn')
       if (Object.keys(ev.modelUsage).length > 0) items.push({ kind: 'turn', modelUsage: ev.modelUsage, skills: turnSkills(items) });
+      break;
+    case 'bg.tasks':
+      next.bgTasks = ev.tasks;
       break;
     case 'context.usage':
       next.context = { percentage: ev.percentage, totalTokens: ev.totalTokens, maxTokens: ev.maxTokens, seq: ev.seq };

@@ -4,6 +4,7 @@ import { createSdkMcpServer, query, tool, type CanUseTool, type McpServerStatus,
 import { EFFORTS, MODELS, type EventBody, type HistoryItem, type McpAction, type McpServerView, type Model, type ModelUsage, type PlanUsage, type ShellResult, type SlashCommandInfo, type UsageTotals } from '@ccui/shared';
 import { z } from 'zod';
 import { visibleCommands } from '../commands';
+import { BgTasks } from './bg-tasks';
 import { mapMessage } from './events';
 import { classifyHeuristic, CLASSIFY_SYSTEM_PROMPT, learnedRoute, learnRoute } from './routing';
 import type { ClaudeRuntime, LiveSession, OpenOptions, SessionInfo, Transport } from './types';
@@ -101,6 +102,7 @@ class Live implements LiveSession {
   // task_id (interno do SDK) -> taskId (tool_use_id do Task tool) — só task_updated/task_progress precisam disto,
   // pois não trazem tool_use_id; populado quando task_started passa pelo loop em run().
   private taskIds = new Map<string, string>();
+  private bg = new BgTasks();
   private stderrTail = '';
   private q: Query;
   private pump: Promise<void>;
@@ -173,7 +175,11 @@ class Live implements LiveSession {
           if (taskId && m.patch.status) this.out.push({ type: 'task.updated', taskId, status: m.patch.status });
           continue; // mapMessage não trata task_updated (não tem tool_use_id pra tagueá-lo sozinho)
         }
-        for (const b of mapMessage(m)) this.out.push(b);
+        if (this.bg.apply(m)) this.out.push({ type: 'bg.tasks', tasks: this.bg.list() });
+        for (const b of mapMessage(m)) {
+          if (b.type === 'tool.result') this.bg.toolResult(b.toolUseId, b.output);
+          this.out.push(b);
+        }
         // after each turn: context occupancy for the auto-compact check ('summary' = last response's usage, no token-count calls)
         if (m.type === 'result') {
           const u = await this.q.getContextUsage({ detail: 'summary' }).catch(() => null);
@@ -184,6 +190,7 @@ class Live implements LiveSession {
       this.out.push({ type: 'error', code: 'exit', message: `${(e as Error).message}\n${this.stderrTail}`.trim() });
     } finally {
       for (const done of [...this.pending.values()]) done(false, 'Sessão encerrada');
+      if (this.bg.stopAll()) this.out.push({ type: 'bg.tasks', tasks: this.bg.list() });
       this.out.end();
     }
   }
@@ -213,6 +220,11 @@ class Live implements LiveSession {
     const r = await this.q.reloadPlugins(); // applied even when it invalidates the prompt cache: the user asked for it
     return { plugins: r.plugins.length, errors: r.error_count };
   }
+  async bgOutput(taskId: string) {
+    const f = this.bg.outputFile(taskId);
+    return f ? this.transport.tailFile(f, BG_OUTPUT_BYTES) : null;
+  }
+  async stopTask(taskId: string) { await this.q.stopTask(taskId); }
   answerPermission(reqId: string, allow: boolean, updatedInput?: Record<string, unknown>) { this.pending.get(reqId)?.(allow, undefined, updatedInput); }
 
   // fecha stdin (EOF) => o claude sai sozinho; se não sair em 2 s, encerra à força
@@ -225,6 +237,7 @@ class Live implements LiveSession {
 }
 
 const IDLE_WAIT_MS = 30_000;
+const BG_OUTPUT_BYTES = 64 * 1024; // tail shown in the background task modal
 const COMMANDS_TIMEOUT_MS = 25_000;
 const USAGE_TIMEOUT_MS = 45_000;
 

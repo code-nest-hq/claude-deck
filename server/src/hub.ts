@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { ZERO_TOTALS, type ClaudeEvent, type EventBody, type McpAction, type Model, type ModelUsage, type PendingPermission, type ServerMsg, type SessionState, type UsageTotals } from '@ccui/shared';
+import { ZERO_TOTALS, type BgTask, type ClaudeEvent, type EventBody, type McpAction, type Model, type ModelUsage, type PendingPermission, type ServerMsg, type SessionState, type UsageTotals } from '@ccui/shared';
 import { logError } from './logs';
 import type { ClaudeRuntime, LiveSession, OpenOptions } from './runtime/types';
 
@@ -24,6 +24,7 @@ interface Entry {
   // ponytail: snapshot cumulativo por-modelo só desta execução (não lido do jsonl); no 1º turno após reabrir a sessão
   // o delta calculado é o acumulado inteiro, não só o turno — aceitável, é só o resumo exibido no terminal
   prevModelUsage: Record<string, ModelUsage> | null;
+  bgTasks: BgTask[]; // last bg.tasks list, sent in the snapshot
 }
 
 // the debug-relevant part of an event for the log's recent-events trail (no streamed text, no big tool payloads)
@@ -71,7 +72,7 @@ export class SessionHub {
   private entry(id: string): Entry {
     let e = this.entries.get(id);
     if (!e) {
-      e = { seq: 0, buffer: [], state: 'idle', live: null, clients: new Set(), pending: new Map(), shellRunning: false, mcpRunning: false, totals: null, prevModelUsage: null };
+      e = { seq: 0, buffer: [], state: 'idle', live: null, clients: new Set(), pending: new Map(), shellRunning: false, mcpRunning: false, totals: null, prevModelUsage: null, bgTasks: [] };
       this.entries.set(id, e);
     }
     return e;
@@ -88,7 +89,7 @@ export class SessionHub {
       e.prevModelUsage = stored.modelUsage; // idem por-modelo, pro 1º turno desta execução calcular o delta certo (só o turno, não a sessão)
     }
     // estado lido DEPOIS do await: eventos emitidos durante a leitura já foram enviados a `c` e o cliente os ignora até hidratar
-    c.send({ type: 'snapshot', sessionId: id, history, state: e.state, lastSeq: e.seq, totals: e.totals ?? ZERO_TOTALS, pending: [...e.pending.values()] });
+    c.send({ type: 'snapshot', sessionId: id, history, state: e.state, lastSeq: e.seq, totals: e.totals ?? ZERO_TOTALS, pending: [...e.pending.values()], bgTasks: e.bgTasks });
   }
 
   async attach(c: Client, id: string, afterSeq?: number) {
@@ -184,6 +185,20 @@ export class SessionHub {
     return e.live.reload();
   }
 
+  // background task modal: null = no live process (the tasks died with it)
+  async bgOutput(id: string, taskId: string) {
+    this.spec(id);
+    const live = this.entries.get(id)?.live;
+    return live ? { live: true, output: await live.bgOutput(taskId) } : { live: false, output: null };
+  }
+  async stopTask(id: string, taskId: string) {
+    this.spec(id);
+    const live = this.entries.get(id)?.live;
+    if (!live) return false;
+    await live.stopTask(taskId);
+    return true;
+  }
+
   private async pump(id: string, e: Entry, live: LiveSession) {
     let crash: EventBody | null = null;
     for await (const b of live.events) {
@@ -256,6 +271,15 @@ export class SessionHub {
       case 'permission.resolved':
         e.pending.delete(body.reqId);
         if (e.pending.size === 0 && e.state === 'awaiting_permission') this.setState(id, e, 'running');
+        break;
+      // a turn the CLI starts by itself (a background task finished: <task-notification>) has no send(): mark it running here
+      case 'message.delta':
+      case 'message.completed':
+      case 'tool.started':
+        if (e.state === 'idle' && e.live) this.setState(id, e, 'running');
+        break;
+      case 'bg.tasks':
+        e.bgTasks = body.tasks;
         break;
       case 'turn.completed':
         e.totals = body.totals;

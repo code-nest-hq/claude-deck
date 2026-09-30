@@ -239,6 +239,24 @@ export function buildApi({ store, hub, conns }: Deps) {
     return c.json({ meta, live: hub.isLive(meta.sessionId), ...spec } satisfies SessionStatus);
   });
 
+  // background tasks modal: output tail and stop (the list itself comes over the WebSocket: bg.tasks / snapshot)
+  const bgTarget = (c: Context) => {
+    const sid = uuidSchema.safeParse(c.req.param('sid'));
+    const taskId = c.req.param('taskId') ?? '';
+    const ok = sid.success && /^[\w-]{1,64}$/.test(taskId) && store.sessions.data.sessions.some((s) => s.sessionId === sid.data && s.projectId === c.req.param('id'));
+    return ok ? { sid: sid.data!, taskId } : null;
+  };
+  api.get('/projects/:id/sessions/:sid/bg/:taskId/output', async (c) => {
+    const t = bgTarget(c);
+    if (!t) return c.json({ error: 'projeto/sessão/task desconhecido' }, 404);
+    try { return c.json(await hub.bgOutput(t.sid, t.taskId)); } catch (e) { return bad(c, (e as Error).message); }
+  });
+  api.post('/projects/:id/sessions/:sid/bg/:taskId/stop', async (c) => {
+    const t = bgTarget(c);
+    if (!t) return c.json({ error: 'projeto/sessão/task desconhecido' }, 404);
+    try { return c.json({ stopped: await hub.stopTask(t.sid, t.taskId) }); } catch (e) { return bad(c, (e as Error).message); }
+  });
+
   // branch/status do Git do projeto (null quando não é um repositório ou o servidor não responde)
   api.get('/projects/:id/git', async (c) => {
     const p = project(c.req.param('id'));

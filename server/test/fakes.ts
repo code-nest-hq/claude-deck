@@ -46,6 +46,8 @@ export class FakeLive implements LiveSession {
   }
   async mcp() { return { servers: [] }; }
   async reload() { return { plugins: 0, errors: 0 }; }
+  async bgOutput() { return null; }
+  async stopTask() {}
   async close() { this.closed = true; this.out.end(); }
   /** the process exits on its own */
   exit() { this.closed = true; this.out.end(); }
