@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { ZERO_TOTALS, type ClaudeEvent, type EventBody, type McpAction, type ModelUsage, type PendingPermission, type ServerMsg, type SessionState, type UsageTotals } from '@ccui/shared';
+import { ZERO_TOTALS, type ClaudeEvent, type EventBody, type McpAction, type Model, type ModelUsage, type PendingPermission, type ServerMsg, type SessionState, type UsageTotals } from '@ccui/shared';
 import type { ClaudeRuntime, LiveSession, OpenOptions } from './runtime/types';
 
 const BUFFER = 2000;
@@ -89,6 +89,14 @@ export class SessionHub {
     const e = this.entry(id);
     if (e.state === 'running' || e.state === 'awaiting_permission') return 'busy';
     this.setState(id, e, 'running'); // reserva antes do await para não abrir dois processos
+    // classify BEFORE taking the process: the process may exit during the (up to 15 s) classifier call,
+    // so nothing may hold on to e.live across that await
+    // `/compact` keeps the session's current model: no classifier call, and the summary isn't downgraded to Haiku
+    let model: Model | undefined;
+    if (spec.routing && !/^\/compact(\s|$)/.test(text.trim())) {
+      this.emit(id, e, { type: 'routing.started' });
+      model = await this.runtimeFor(id).classify(spec.cwd, text).catch(() => 'sonnet' as const);
+    }
     if (!e.live) {
       try {
         e.live = await this.runtimeFor(id).open({ ...spec, sessionId: id });
@@ -99,15 +107,13 @@ export class SessionHub {
       }
       void this.pump(id, e, e.live);
     }
-    // `/compact` keeps the session's current model: no classifier call, and the summary isn't downgraded to Haiku
-    if (spec.routing && !/^\/compact(\s|$)/.test(text.trim())) {
-      this.emit(id, e, { type: 'routing.started' });
-      const model = await this.runtimeFor(id).classify(spec.cwd, text).catch(() => 'sonnet' as const);
-      await e.live.setModel(model).catch(() => {});
+    const live = e.live;
+    if (model) {
+      await live.setModel(model).catch(() => {});
       this.emit(id, e, { type: 'model.routed', model });
     }
     this.emit(id, e, { type: 'user.message', text });
-    e.live.send(text, attachments);
+    live.send(text, attachments);
     return 'ok';
   }
 
