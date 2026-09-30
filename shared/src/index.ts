@@ -112,7 +112,8 @@ export type EventBody =
   | ({ type: 'shell.result'; id: string } & ShellResult)
   // `/mcp` panel: servers absent = still loading (the client keeps the previous list while it refreshes)
   | { type: 'mcp.status'; id: string; servers?: McpServerView[]; error?: string }
-  | { type: 'error'; code: 'runtime' | 'exit'; message: string };
+  // errorId: key of the entry in the daily error log (Logs page), shown next to the error so it can be looked up
+  | { type: 'error'; code: 'runtime' | 'exit'; message: string; errorId?: string };
 export type ClaudeEvent = EventBody & { sessionId: string; seq: number; ts: number };
 export interface HistoryItem { role: 'user' | 'assistant'; text: string }
 // acumulado da sessão (todas as execuções, inclusive antes de um resume); custo é ESTIMATIVA a preço de API (não é cobrança em plano de assinatura)
@@ -128,6 +129,18 @@ export interface McpServerView {
 export const mcpActionSchema = z.object({ kind: z.enum(['reconnect', 'enable', 'disable']), server: z.string().min(1).max(200) });
 export type McpAction = z.infer<typeof mcpActionSchema>;
 export const ZERO_TOTALS: UsageTotals = { costUsd: 0, input: 0, output: 0, cacheCreation: 0, cacheRead: 0 };
+
+// ---- error log: one JSON line per entry in <data dir>/logs/YYYY-MM-DD.jsonl (local date) ----
+export interface LogEntry {
+  id: string; ts: string; level: 'error' | 'warn';
+  /** session = event of a Claude session; ws/http = request handling; process = uncaught exception in the backend */
+  source: 'session' | 'ws' | 'http' | 'process';
+  code?: string; message: string; stack?: string;
+  sessionId?: string; projectId?: string; projectName?: string; sessionName?: string;
+  /** everything else useful to debug later (open options, session state, recent events, request, versions) */
+  context?: Record<string, unknown>;
+}
+export const LOG_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 // ---- protocolo WebSocket ----
 export const ClientMsg = z.discriminatedUnion('type', [
@@ -147,5 +160,6 @@ export type ServerMsg =
   | { type: 'ready' }
   | { type: 'snapshot'; sessionId: string; history: HistoryItem[]; state: SessionState; lastSeq: number; totals: UsageTotals; pending: PendingPermission[] }
   | { type: 'event'; event: ClaudeEvent }
-  | { type: 'error'; code: string; message: string }
+  | { type: 'error'; code: string; message: string; errorId?: string }
+  | { type: 'log'; entry: LogEntry }
   | { type: 'connection.status'; id: string; status: ConnStatus; message?: string };

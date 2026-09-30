@@ -9,6 +9,7 @@ import {
 import { versionWarning, type Connections } from './connections';
 import { ensureMeta, listProjectSessions } from './domain';
 import { parseGitStatus } from './git';
+import { logDay, logDays, readLogs } from './logs';
 import { activate, DEFAULT_PROFILE, knownProfile, listProfiles, logout, removeProfile, sendCode, startLogin, usageFor } from './profiles';
 import type { SessionHub } from './hub';
 import { todayDelta } from './runtime/jsonl';
@@ -28,6 +29,12 @@ export function buildApi({ store, hub, conns }: Deps) {
   const connections = () => store.config.data.connections;
   const project = (id: string) => projects().find((p) => p.id === id);
   const bad = (c: Context, msg: string) => c.json({ error: msg }, 400);
+
+  // daily error log (Logs page): ?day=YYYY-MM-DD, default today; `days` lists the days that have a file
+  api.get('/logs', async (c) => {
+    const day = c.req.query('day') ?? logDay();
+    return c.json({ day, days: await logDays(), entries: await readLogs(day) });
+  });
 
   api.get('/state', (c) => c.json({ config: store.config.data, projects: projects(), status: conns.all() }));
 

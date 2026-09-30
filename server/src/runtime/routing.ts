@@ -1,6 +1,8 @@
 import type { Model } from '@ccui/shared';
 
-const SONNET_HINTS = /\b(implementa|implement|refator|refactor|cri[ae]|creat|constr[oó][ei]|build|arquitet|architect|desenh[ae]|design|corrig[ei].*bug|fix.*bug|migra|migrat|integra|integrat|escreve|write.*(fun[cç][aã]o|function|componente|component|endpoint|feature|teste|test)|planej[ae]|plan)\b/i;
+// stems match as word prefixes (no trailing \b): "refator" must catch refatorar/refatora, "migrat" migrate/migrating.
+// A false hit only costs Sonnet on a simple prompt; a miss costs an extra Haiku classifier call.
+const SONNET_HINTS = /\b(implementa|implement|refator|refactor|cri[ae]|creat|constr(?:[oó][ei]|u)|build|arquitet|architect|desenh[ae]|design|corrig[ei].*bug|fix.*bug|migra|migrat|integra|integrat|escreve|write.*(fun[cç][aã]o|function|componente|component|endpoint|feature|teste|test)|planej[ae]|plan)/i;
 const HAIKU_HINTS = /^\s*(o que|what is|what's|explica|explain|list[ae]|mostr[ae]|show|confirma|confirm|qual|which|quando|when|resum[ae]|summariz)\b/i;
 
 // null = zona cinzenta: a heurística não decide, precisa da chamada Haiku descartável (ver sdk-runtime.ts classifyViaHaiku)

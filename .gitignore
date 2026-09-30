@@ -20,7 +20,7 @@ coverage/
 # Runtime / temporary
 tmp/
 temp/
-logs/
+/logs/
 *.log
 
 # Environment / secrets

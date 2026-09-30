@@ -2,7 +2,7 @@ import { execFile, spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { getSessionInfo, getSessionMessages, listSessions } from '@anthropic-ai/claude-agent-sdk';
+import { getSessionMessages, listSessions } from '@anthropic-ai/claude-agent-sdk';
 import type { HistoryItem } from '@ccui/shared';
 import { spawnManaged } from './child';
 import { activeConfigDir } from '../profiles';
@@ -12,6 +12,9 @@ import { costCheckpoints, lastCostState } from './jsonl';
 import type { Transport } from './types';
 
 export { reportOrphans } from './child';
+
+const sessionFile = (sessionId: string, cwd: string) =>
+  path.join(process.env.CLAUDE_CONFIG_DIR ?? path.join(homedir(), '.claude'), 'projects', encodeCwd(cwd), `${sessionId}.jsonl`);
 
 export const SHELL_TIMEOUT_MS = 120_000;
 export const SHELL_MAX_OUTPUT = 200 * 1024;
@@ -58,8 +61,11 @@ export const localTransport: Transport = {
     });
   },
 
+  // the jsonl itself, like the SSH transport: getSessionInfo() returns undefined for real sessions it doesn't list
+  // (e.g. one that started with a slash command), and a new process would then fail with "Session ID … is already in use"
   async sessionExists(sessionId, cwd) {
-    return !!(await getSessionInfo(sessionId, { dir: cwd }));
+    if (!SESSION_ID_RE.test(sessionId)) return false;
+    try { return (await fs.stat(sessionFile(sessionId, cwd))).isFile(); } catch { return false; }
   },
 
   // Comando digitado pelo usuário (modo `!`): shell de login do usuário, args em array (sem interpolar o texto), grupo próprio para matar tudo no timeout.
@@ -83,7 +89,7 @@ export const localTransport: Transport = {
   // lê o fim do jsonl (o `cost-state` é regravado periodicamente); aumenta o trecho até achar
   async costCheckpoints(sessionId, cwd) {
     if (!SESSION_ID_RE.test(sessionId)) return null;
-    const file = path.join(process.env.CLAUDE_CONFIG_DIR ?? path.join(homedir(), '.claude'), 'projects', encodeCwd(cwd), `${sessionId}.jsonl`);
+    const file = sessionFile(sessionId, cwd);
     let fh;
     try {
       fh = await fs.open(file, 'r');
@@ -97,7 +103,7 @@ export const localTransport: Transport = {
 
   async usage(sessionId, cwd) {
     if (!SESSION_ID_RE.test(sessionId)) return null;
-    const file = path.join(process.env.CLAUDE_CONFIG_DIR ?? path.join(homedir(), '.claude'), 'projects', encodeCwd(cwd), `${sessionId}.jsonl`);
+    const file = sessionFile(sessionId, cwd);
     let fh;
     try {
       fh = await fs.open(file, 'r');

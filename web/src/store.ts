@@ -1,12 +1,12 @@
 import { create } from 'zustand';
-import type { Config, ConnStatus, McpAction, Project, ServerMsg, SessionRow, SlashCommandInfo } from '@ccui/shared';
+import type { Config, ConnStatus, LogEntry, McpAction, Project, ServerMsg, SessionRow, SlashCommandInfo } from '@ccui/shared';
 import { api, initToken } from './api';
 import { addError, applyEvent, applySnapshot, emptyChat, type Chat } from './features/chat/reduce';
 import { disableNotify, enableNotify, notify, notifyEnabled } from './notify';
 import { createSocket } from './ws';
 
 export interface Tab { projectId: string; sessionId: string }
-export interface Ui { palette: boolean; help: boolean; newSession: boolean; newFor: string | null; term: boolean; settingsFor: string | null; appSettings: boolean; spend: boolean; profile: boolean }
+export interface Ui { palette: boolean; help: boolean; newSession: boolean; newFor: string | null; term: boolean; settingsFor: string | null; appSettings: boolean; spend: boolean; profile: boolean; logs: boolean; logFilter: string }
 export const SIDEBAR_W_MIN = 224;
 export const SIDEBAR_W_MAX = 420;
 export const SIDEBAR_W_DEFAULT = 288;
@@ -43,6 +43,7 @@ interface App {
   layout: Layout;
   commands: Record<string, SlashCommandInfo[]>; // chave "<projeto>:<lean>"
   attachments: Record<string, string[]>; // sessionId -> caminhos absolutos ainda não enviados
+  logs: LogEntry[]; // error log entries pushed live since this page loaded (the Logs page merges them with the day's file)
   start(): Promise<void>;
   reloadProjects(): Promise<void>;
   refreshRows(projectId: string): Promise<void>;
@@ -97,13 +98,16 @@ export const useApp = create<App>((set, get) => {
       set((s) => ({ status: { ...s.status, [m.id]: m.status } }));
     } else if (m.type === 'error') {
       const a = get().active;
-      if (a) set((s) => ({ chats: { ...s.chats, [a.sessionId]: addError(s.chats[a.sessionId] ?? emptyChat(), m.message) } }));
+      if (a) set((s) => ({ chats: { ...s.chats, [a.sessionId]: addError(s.chats[a.sessionId] ?? emptyChat(), m.message, m.errorId) } }));
+    } else if (m.type === 'log') {
+      set((s) => ({ logs: [...s.logs.slice(-1999), m.entry] }));
     }
   };
 
   return {
     tokenMissing: false, up: false, config: null, projects: [], rows: {}, active: null, tabs: [], chats: {}, status: {},
-    attention: {}, notifyOn: notifyEnabled(), ui: { palette: false, help: false, newSession: false, newFor: null, term: false, settingsFor: null, appSettings: false, spend: false, profile: false },
+    attention: {}, notifyOn: notifyEnabled(), ui: { palette: false, help: false, newSession: false, newFor: null, term: false, settingsFor: null, appSettings: false, spend: false, profile: false, logs: false, logFilter: '' },
+    logs: [],
     layout: loadLayout(), commands: {}, attachments: {},
 
     async start() {

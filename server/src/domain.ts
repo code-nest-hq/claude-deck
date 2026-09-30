@@ -1,5 +1,5 @@
 import type { Project, SessionRow } from '@ccui/shared';
-import type { OpenSpec, SessionHub } from './hub';
+import type { OpenSpec, SessionHub, SessionLabel } from './hub';
 import type { ClaudeRuntime } from './runtime/types';
 import type { Store } from './store';
 
@@ -63,4 +63,11 @@ export function connectionIdFor(store: Store, sessionId: string): string {
   const project = meta && store.projects.data.projects.find((p) => p.id === meta.projectId);
   if (!project) throw new Error('sessão desconhecida');
   return project.connectionId;
+}
+
+/** who a session belongs to, for the error log; never throws (the session may be unknown) */
+export function sessionLabel(store: Store, sessionId: string): SessionLabel {
+  const meta = store.sessions.data.sessions.find((s) => s.sessionId === sessionId);
+  const project = meta && store.projects.data.projects.find((p) => p.id === meta.projectId);
+  return { projectId: meta?.projectId, projectName: project?.name, sessionName: meta?.name, connectionId: project?.connectionId };
 }

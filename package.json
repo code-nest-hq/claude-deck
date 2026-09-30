@@ -12,7 +12,9 @@
     "dev:web": "npm run dev -w web",
     "build": "npm run build -w web",
     "start": "tsx server/src/index.ts",
-    "typecheck": "tsc -p shared && tsc -p server && tsc -p web"
+    "typecheck": "tsc -p shared && tsc -p server && tsc -p web",
+    "test": "node --import tsx --test server/test/unit.test.ts",
+    "test:live": "CCUI_LIVE=1 node --import tsx --test --test-concurrency=1 server/test/live.test.ts"
   },
   "devDependencies": {
     "tsx": "^4.23.15",

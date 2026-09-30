@@ -7,7 +7,7 @@ export type Item =
   | { kind: 'shell'; id: string; command: string; output?: string; exitCode?: number | null; truncated?: boolean }
   | { kind: 'mcp'; id: string; servers?: McpServerView[]; loading: boolean; error?: string }
   | { kind: 'turn'; modelUsage: Record<string, ModelUsage>; skills: SkillUse[] }
-  | { kind: 'error'; text: string };
+  | { kind: 'error'; text: string; errorId?: string };
 
 // a skill used in a turn: typed by the user as "/name" (a candidate: the view keeps only known non-builtin commands)
 // or invoked by Claude through the Skill tool
@@ -52,7 +52,7 @@ export function applySnapshot(s: Extract<ServerMsg, { type: 'snapshot' }>): Chat
   };
 }
 
-export const addError = (c: Chat, text: string): Chat => ({ ...c, items: [...c.items, { kind: 'error', text }] });
+export const addError = (c: Chat, text: string, errorId?: string): Chat => ({ ...c, items: [...c.items, { kind: 'error', text, errorId }] });
 
 // injeta um item novo dentro do TaskEntry certo; cria o task defensivamente se task.started ainda não chegou
 function upsertTaskItem(tasks: TaskEntry[], taskId: string, item: Item): TaskEntry[] {
@@ -173,7 +173,7 @@ export function applyEvent(c: Chat, ev: ClaudeEvent): Chat {
         : { startedAt: c.compact?.startedAt ?? ev.ts, seq: ev.seq, phase: ev.phase, preTokens: ev.preTokens, postTokens: ev.postTokens, message: ev.message };
       break;
     case 'error':
-      items.push({ kind: 'error', text: ev.message });
+      items.push({ kind: 'error', text: ev.message, errorId: ev.errorId });
       break;
   }
   return next;

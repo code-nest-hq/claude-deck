@@ -6,6 +6,7 @@ import { NewSessionModal } from '../features/sessions/NewSessionModal';
 import { Palette } from '../features/sessions/Palette';
 import { Shortcuts } from '../features/sessions/Shortcuts';
 import { Tabs } from '../features/sessions/Tabs';
+import { LogsPage } from '../features/logs/LogsPage';
 import { ProfilePage } from '../features/profile/ProfilePage';
 import { SpendDashboard } from '../features/spend/SpendDashboard';
 import { useApp } from '../store';
@@ -44,6 +45,7 @@ export function App() {
       <div className="flex min-w-0 flex-1 flex-col">
         {ui.spend ? <SpendDashboard onClose={() => setUi({ spend: false })} />
           : ui.profile ? <ProfilePage onClose={() => setUi({ profile: false })} />
+          : ui.logs ? <LogsPage onClose={() => setUi({ logs: false })} />
           : (<><Tabs /><Chat /></>)}
       </div>
       {ui.newSession && <NewSessionModal onClose={() => setUi({ newSession: false, newFor: null })} />}

@@ -1,8 +1,13 @@
 # Testing
 
-## Actual state (deliberate decision, not pending work)
+## Automated tests (added 2026-09-30, on request)
 
-The project **has no automated tests**. This was a deliberate user choice for this phase — don't suggest adding Vitest/Jest, `npm test`, or CI unless the user explicitly asks.
+Built-in `node:test` run through `tsx` — no test framework dependency. Two suites in `server/test/`:
+
+- `npm test` -> `unit.test.ts`: fast and free (no Claude process). Model Routing heuristic cases, `SessionHub` send flow with a fake runtime (`fakes.ts`: routing order, `/compact` skipping routing, process reuse, busy, the process exiting mid-classification), the daily error log (errorId, one entry per error, survives the crash-recovery snapshot), SDK message mapping (compaction), local `sessionExists`.
+- `npm run test:live` -> `live.test.ts`: the real Claude Code through the Agent SDK (Haiku, a few cents; needs a logged-in `claude`). Send/receive + turn totals + context usage, resume in a new process, the Haiku routing classifier on gray-zone prompts, and `SessionHub` end to end with routing on. Runs in a throwaway project dir and deletes the sessions it creates. Skipped unless `CCUI_LIVE=1`.
+
+Run `npm test` after any backend change; run `npm run test:live` when touching the runtime, routing, `SessionHub` or the SDK version.
 
 ## Real commands available (`package.json`)
 
@@ -17,7 +22,7 @@ There is no `lint` script in `package.json` — don't document or suggest one un
 
 ## Validation available today
 
-- **Typecheck**: `npm run typecheck` is the only automated correctness check that exists. Run it clean as the minimum bar before considering a change done.
+- **Typecheck**: `npm run typecheck`. Run it clean, plus `npm test`, as the minimum bar before considering a change done.
 - **Build**: `npm run build` confirms the frontend compiles/bundles.
 - **Manual UI validation**: the browser isn't controllable by AI in this environment (only local Firefox is available, and its `--screenshot` fires before the SPA loads) — no screen has been visually verified by an AI. The user tests manually in the browser and reports what needs adjusting.
 

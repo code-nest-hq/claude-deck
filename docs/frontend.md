@@ -61,6 +61,7 @@ Main actions: `open()`, `closeTab()`, `send()` (includes the session's staged at
 | Slash autocomplete | `features/chat/SlashMenu.tsx` | ranking: prefix > alias > name contains > description contains, max 40 items |
 | Composer | `features/chat/Chat.tsx` | height-resizable box with attach button and staged-files bar; a mirror div behind a transparent-text textarea colors the `/command` (blue = exists, red = unknown) and the `!` prefix; `/mcp` and `!cmd` are intercepted in `submit()` and never reach the model |
 | `/mcp` panel | `features/chat/McpCard.tsx` | servers grouped by scope, status icons like the terminal; click for details, tools, Reconnect/Enable/Disable; needs-auth claude.ai connectors link to claude.ai settings |
+| Logs | `features/logs/LogsPage.tsx` | Daily error log, live (`logs` in the store); filter by day, project, level, free text / error ID. The error ID under a chat error opens it here |
 | Project settings | `features/projects/ProjectSettingsModal.tsx` | Lean, Model Routing, Auto-compact (`chat/AutoCompactModal.tsx`), permission bypass (confirmation required, red badge when active) |
 | Folder browser | `features/projects/FolderBrowserModal.tsx` | `GET /api/connections/:id/browse`; folder mode for new projects, file mode for attachments |
 | Spend dashboard | `features/spend/SpendDashboard.tsx` | today's total/by model/by project; drill-down lists recent sessions and can open a Haiku+routing "validate spend" session |

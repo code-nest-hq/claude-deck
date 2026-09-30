@@ -1,4 +1,4 @@
-import type { Config, ConnStatus, Connection, DirEntry, Effort, GitInfo, Model, PlanUsage, ProfileView, Project, ProjectUsageView, SessionRow, SlashCommandInfo, TodayUsage } from '@ccui/shared';
+import type { Config, ConnStatus, Connection, DirEntry, Effort, GitInfo, LogEntry, Model, PlanUsage, ProfileView, Project, ProjectUsageView, SessionRow, SlashCommandInfo, TodayUsage } from '@ccui/shared';
 
 const KEY = 'ccui-token';
 let token: string | null = null;
@@ -45,6 +45,7 @@ export const api = {
   git: (pid: string) => req<GitInfo | null>('GET', `/api/projects/${pid}/git`),
   usageToday: () => req<TodayUsage>('GET', '/api/usage/today'),
   projectUsage: (id: string) => req<ProjectUsageView>('GET', `/api/projects/${id}/usage`),
+  logs: (day?: string) => req<{ day: string; days: string[]; entries: LogEntry[] }>('GET', `/api/logs${day ? `?day=${day}` : ''}`),
   profiles: () => req<ProfileView[]>('GET', '/api/profiles'),
   addProfile: (name: string) => req<{ id: string; name: string }>('POST', '/api/profiles', { name }),
   profileAction: (id: string, action: 'activate' | 'login' | 'logout') => req<void>('POST', `/api/profiles/${id}/${action}`),

@@ -19,6 +19,23 @@ import { ToolCard } from './ToolCard';
 const STUCK_MS = 60_000;
 const json = (v: unknown) => JSON.stringify(v, null, 2)?.slice(0, 2000) ?? '';
 
+// error + its log id: click copies it and opens the Logs page filtered by it
+function ErrorItem({ text, errorId }: { text: string; errorId?: string }) {
+  const setUi = useApp((s) => s.setUi);
+  return (
+    <div className="whitespace-pre-wrap rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
+      {text}
+      {errorId && (
+        <button
+          className="mt-1.5 block font-mono text-[11px] text-rose-400/70 hover:text-rose-200"
+          title="Copiar o ID e abrir nos Logs"
+          onClick={() => { void navigator.clipboard?.writeText(errorId).catch(() => {}); setUi({ logs: true, spend: false, profile: false, logFilter: errorId }); }}
+        >ID do erro: {errorId}</button>
+      )}
+    </div>
+  );
+}
+
 function ItemView({ it, busy, bypass, commands }: { it: Item; busy: boolean; bypass: boolean; commands?: SlashCommandInfo[] }) {
   // mensagens do modo shell/comandos vindas do terminal chegam como blocos de código: renderiza como markdown
   if (it.kind === 'user') {
@@ -37,7 +54,7 @@ function ItemView({ it, busy, bypass, commands }: { it: Item; busy: boolean; byp
     );
   }
   if (it.kind === 'assistant') return <Markdown text={it.text} />;
-  if (it.kind === 'error') return <div className="whitespace-pre-wrap rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">{it.text}</div>;
+  if (it.kind === 'error') return <ErrorItem text={it.text} errorId={it.errorId} />;
   if (it.kind === 'shell') return <ShellCard it={it} busy={busy} />;
   if (it.kind === 'mcp') return <McpCard it={it} />;
   if (it.kind === 'turn') return <TurnSummary modelUsage={it.modelUsage} skills={it.skills} commands={commands} bypass={bypass} />;

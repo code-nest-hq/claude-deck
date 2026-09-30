@@ -26,7 +26,7 @@ Web app to run Claude Code sessions in the browser instead of the terminal: chat
 - Focused changes: no unrelated refactors, no swapping dependencies without need, don't touch `web/dist` (generated) or `node_modules`.
 - **Never use Opus or Fable**, in any model/config/suggestion. Only `haiku`/`sonnet` (see `MODELS` in `shared/src/index.ts`, and the `forbiddenModel` check in `server/src/runtime/sdk-runtime.ts:43`).
 - Preserve the already-confirmed remote runtime (SSH) decisions — see `docs/architecture.md` §Remote/SSH — don't replace with a generic implementation without checking the code first.
-- No automated tests and no prior git history before 2026-09-22 was an explicit project decision, not something pending. Don't suggest adding tests unless the user asks.
+- No prior git history before 2026-09-22 was an explicit project decision. Tests exist since 2026-09-30 (`server/test/`, built-in `node:test`); extend them when changing the covered areas, don't add a test framework.
 - Write everything — code, comments, commit messages, docs — in English, never Portuguese.
 
 ## Before changing code
@@ -43,7 +43,9 @@ Web app to run Claude Code sessions in the browser instead of the terminal: chat
 - `npm run build` — builds the frontend (`web`)
 - `npm run dev:server` / `npm run dev:web` — local dev
 - `./restart.sh` — kills the old backend via the lock PID (`~/.code-nest/lock`), builds, and starts it again
-- There is no lint or automated test script in `package.json` — don't invent `npm test`/`npm run lint`.
+- `npm test` — unit suite (free, no Claude process); `npm run test:live` — real Claude Code via the SDK (Haiku, costs a few cents). See `docs/testing.md`.
+- There is no lint script in `package.json` — don't invent `npm run lint`.
+- **Before every commit + push**: run `npm run typecheck`, `npm test` and `npm run test:live`; commit and push only if all pass. On a failure, don't commit — report the failing output.
 
 ## Context Efficiency
 
@@ -59,5 +61,5 @@ Web app to run Claude Code sessions in the browser instead of the terminal: chat
 - `docs/architecture.md` — overview, runtime (local/SSH), WebSocket protocol, Model Routing. Read before changing flow between frontend/backend or the runtime.
 - `docs/frontend.md` — structure of `web/src`, state, component patterns. Read before touching the UI.
 - `docs/backend.md` — structure of `server/src`, SessionHub, transports, SDK. Read before touching backend/runtime.
-- `docs/testing.md` — real validation state (no automated tests) and what to check manually.
+- `docs/testing.md` — test suites (unit + live) and what to check manually.
 - `docs/superpowers/specs/` and `.../plans/` — detailed specs and plans per feature; consult only the relevant one when depth/history is needed, never as general reading.

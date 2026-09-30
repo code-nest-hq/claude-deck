@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { ZERO_TOTALS, type ClaudeEvent, type EventBody, type McpAction, type Model, type ModelUsage, type PendingPermission, type ServerMsg, type SessionState, type UsageTotals } from '@ccui/shared';
+import { logError } from './logs';
 import type { ClaudeRuntime, LiveSession, OpenOptions } from './runtime/types';
 
 const BUFFER = 2000;
@@ -7,6 +8,8 @@ const INTERRUPT_GRACE_MS = 5000;
 
 export interface Client { send(m: ServerMsg): void; sessions: Set<string> }
 export type OpenSpec = Omit<OpenOptions, 'sessionId'>;
+/** who a session belongs to, for the error log */
+export interface SessionLabel { projectId?: string; projectName?: string; sessionName?: string; connectionId?: string }
 
 interface Entry {
   seq: number;
@@ -21,6 +24,23 @@ interface Entry {
   // ponytail: snapshot cumulativo por-modelo só desta execução (não lido do jsonl); no 1º turno após reabrir a sessão
   // o delta calculado é o acumulado inteiro, não só o turno — aceitável, é só o resumo exibido no terminal
   prevModelUsage: Record<string, ModelUsage> | null;
+}
+
+// the debug-relevant part of an event for the log's recent-events trail (no streamed text, no big tool payloads)
+function summary(ev: ClaudeEvent): Record<string, unknown> {
+  const cut = (v: unknown, n = 300) => (typeof v === 'string' ? v.slice(0, n) : JSON.stringify(v ?? null).slice(0, n));
+  switch (ev.type) {
+    case 'session.state': return { state: ev.state };
+    case 'user.message': case 'message.completed': return { text: cut(ev.text) };
+    case 'model.routed': return { model: ev.model };
+    case 'tool.started': return { name: ev.name, input: cut(ev.input) };
+    case 'tool.result': return { toolUseId: ev.toolUseId, isError: ev.isError, output: cut(ev.output) };
+    case 'error': return { code: ev.code, message: cut(ev.message, 1000), errorId: ev.errorId };
+    case 'turn.completed': return { costUsd: ev.totals.costUsd };
+    case 'context.usage': return { percentage: ev.percentage };
+    case 'compact': return { phase: ev.phase };
+    default: return {};
+  }
 }
 
 // cumulativo atual menos o snapshot anterior, por modelo; negativo vira 0 (defensivo)
@@ -42,7 +62,11 @@ function diffModelUsage(prev: Record<string, ModelUsage>, cur: Record<string, Mo
 
 export class SessionHub {
   private entries = new Map<string, Entry>();
-  constructor(private runtimeFor: (sessionId: string) => ClaudeRuntime, private spec: (sessionId: string) => OpenSpec) {}
+  constructor(
+    private runtimeFor: (sessionId: string) => ClaudeRuntime,
+    private spec: (sessionId: string) => OpenSpec,
+    private label: (sessionId: string) => SessionLabel = () => ({}),
+  ) {}
 
   private entry(id: string): Entry {
     let e = this.entries.get(id);
@@ -161,22 +185,24 @@ export class SessionHub {
   }
 
   private async pump(id: string, e: Entry, live: LiveSession) {
-    let crashed = false;
+    let crash: EventBody | null = null;
     for await (const b of live.events) {
-      if (b.type === 'error' && b.code === 'exit') crashed = true;
-      this.emit(id, e, b);
+      const ev = this.emit(id, e, b);
+      if (ev.type === 'error' && ev.code === 'exit') crash = ev;
     }
     e.live = null;
     e.pending.clear();
     this.setState(id, e, 'exited');
-    if (crashed) void this.recover(id, e);
+    if (crash) void this.recover(id, e, crash);
   }
 
   // queda de SSH/crash: o claude remoto termina o turno sozinho; espera ele sair e reenvia o histórico completo
-  private async recover(id: string, e: Entry) {
+  // the snapshot rebuilds the chat from the jsonl, which never has the crash: the error (same errorId, not logged again) is re-sent after it
+  private async recover(id: string, e: Entry, crash: EventBody) {
     try {
       await this.runtimeFor(id).settle(id, this.spec(id).cwd);
       for (const c of e.clients) await this.snapshot(c, id, e);
+      this.emit(id, e, crash);
     } catch { /* conexão ainda fora: o usuário reabre a sessão depois */ }
   }
 
@@ -199,7 +225,20 @@ export class SessionHub {
     await Promise.all([...this.entries.values()].map((e) => e.live?.close()));
   }
 
-  private emit(id: string, e: Entry, body: EventBody) {
+  // every session error goes to the daily log once (the event carries its errorId from then on)
+  private logSessionError(id: string, e: Entry, body: Extract<EventBody, { type: 'error' }>): string {
+    let spec: OpenSpec | undefined;
+    try { spec = this.spec(id); } catch { /* unknown session */ }
+    const recent = e.buffer.filter((x) => x.type !== 'message.delta').slice(-20)
+      .map((x) => ({ seq: x.seq, ts: new Date(x.ts).toISOString(), type: x.type, ...summary(x) }));
+    return logError({
+      level: 'error', source: 'session', code: body.code, message: body.message, sessionId: id, ...this.label(id),
+      context: { spec, state: e.state, live: !!e.live, pendingPermissions: e.pending.size, seq: e.seq, totals: e.totals, recentEvents: recent },
+    });
+  }
+
+  private emit(id: string, e: Entry, body: EventBody): ClaudeEvent {
+    if (body.type === 'error' && !body.errorId) body = { ...body, errorId: this.logSessionError(id, e, body) };
     if (body.type === 'turn.completed') {
       const cumulative = body.modelUsage;
       body = { ...body, modelUsage: diffModelUsage(e.prevModelUsage ?? {}, cumulative) };
@@ -223,6 +262,7 @@ export class SessionHub {
         this.setState(id, e, 'idle');
         break;
     }
+    return ev;
   }
 
   private setState(id: string, e: Entry, s: SessionState) {
