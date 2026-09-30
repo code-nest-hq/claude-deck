@@ -30,6 +30,9 @@ export interface Chat {
   pendingRoutedModel?: Model; // "prateleira" pro modelo escolhido; consumido pelo próximo user.message
   turnPhase: 'idle' | 'routing' | 'thinking'; // indicador de progresso enquanto não chega nenhum conteúdo do turno
   turnPhaseAt: number;
+  // last context occupancy (seq = its event, so the auto-compact prompt fires once per turn)
+  context?: { percentage: number; totalTokens: number; maxTokens: number; seq: number };
+  compact?: { phase: 'running' | 'done' | 'failed'; startedAt: number; seq: number; preTokens?: number; postTokens?: number; message?: string };
 }
 
 export const emptyChat = (): Chat => ({ hydrated: false, items: [], state: 'idle', lastSeq: 0, totals: ZERO_TOTALS, pending: [], lastEventAt: Date.now(), tasks: [], turnPhase: 'idle', turnPhaseAt: 0 });
@@ -160,6 +163,14 @@ export function applyEvent(c: Chat, ev: ClaudeEvent): Chat {
       next.lastTokens = { input: ev.inputTokens, output: ev.outputTokens, cacheCreation: ev.cacheCreationTokens, cacheRead: ev.cacheReadTokens };
       // resumo só deste turno (com modelo usado); mostrado no terminal, não na conversa principal (ItemView ignora 'turn')
       if (Object.keys(ev.modelUsage).length > 0) items.push({ kind: 'turn', modelUsage: ev.modelUsage, skills: turnSkills(items) });
+      break;
+    case 'context.usage':
+      next.context = { percentage: ev.percentage, totalTokens: ev.totalTokens, maxTokens: ev.maxTokens, seq: ev.seq };
+      break;
+    case 'compact':
+      next.compact = ev.phase === 'started'
+        ? { phase: 'running', startedAt: ev.ts, seq: ev.seq }
+        : { startedAt: c.compact?.startedAt ?? ev.ts, seq: ev.seq, phase: ev.phase, preTokens: ev.preTokens, postTokens: ev.postTokens, message: ev.message };
       break;
     case 'error':
       items.push({ kind: 'error', text: ev.message });

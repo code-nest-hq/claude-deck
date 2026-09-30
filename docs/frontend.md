@@ -16,7 +16,7 @@ theme.ts              light/dark/system theme (outside React, localStorage)
 features/chat/        Chat, reduce.ts (event reducer), Markdown, GitBar, CommandsPanel,
                        ShellCard, McpCard, SlashMenu, ToolCard, AttachMenu, AskUserQuestionModal
 features/sessions/    Tabs, Palette (Ctrl+K), Shortcuts (? modal), NewSessionModal
-features/projects/    Sidebar, ProjectSettingsModal (lean/routing/bypass),
+features/projects/    Sidebar, ProjectSettingsModal (lean/routing/auto-compact/bypass),
                        FolderBrowserModal (pick a folder, or files to attach)
 features/spend/       SpendDashboard (today by model/project), ProjectSpendView (drill-down)
 features/connect/     ConnectScreen, ServerForm (initial connection setup)
@@ -61,7 +61,7 @@ Main actions: `open()`, `closeTab()`, `send()` (includes the session's staged at
 | Slash autocomplete | `features/chat/SlashMenu.tsx` | ranking: prefix > alias > name contains > description contains, max 40 items |
 | Composer | `features/chat/Chat.tsx` | height-resizable box with attach button and staged-files bar; a mirror div behind a transparent-text textarea colors the `/command` (blue = exists, red = unknown) and the `!` prefix; `/mcp` and `!cmd` are intercepted in `submit()` and never reach the model |
 | `/mcp` panel | `features/chat/McpCard.tsx` | servers grouped by scope, status icons like the terminal; click for details, tools, Reconnect/Enable/Disable; needs-auth claude.ai connectors link to claude.ai settings |
-| Project settings | `features/projects/ProjectSettingsModal.tsx` | Lean, Model Routing, permission bypass (confirmation required, red badge when active) |
+| Project settings | `features/projects/ProjectSettingsModal.tsx` | Lean, Model Routing, Auto-compact (`chat/AutoCompactModal.tsx`), permission bypass (confirmation required, red badge when active) |
 | Folder browser | `features/projects/FolderBrowserModal.tsx` | `GET /api/connections/:id/browse`; folder mode for new projects, file mode for attachments |
 | Spend dashboard | `features/spend/SpendDashboard.tsx` | today's total/by model/by project; drill-down lists recent sessions and can open a Haiku+routing "validate spend" session |
 | AskUserQuestion modal | `features/chat/AskUserQuestionModal.tsx` | single/multi-select + free text, answer sent via `updatedInput` |

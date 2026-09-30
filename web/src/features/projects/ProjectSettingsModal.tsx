@@ -18,7 +18,7 @@ function Toggle({ on, label, desc, tone = 'zinc', onClick }: { on: boolean; labe
   );
 }
 
-// Configurações do projeto: caminho/conexão, toggles (lean/rota/bypass), modelo/effort default e skills disponíveis.
+// Configurações do projeto: caminho/conexão, toggles (lean/routing/auto-compact/bypass), modelo/effort default e skills disponíveis.
 // Substitui os antigos botões lean/rota/bypass na própria linha do projeto (que sobrepunham o nome no hover).
 export function ProjectSettingsModal({ projectId, onClose }: { projectId: string; onClose: () => void }) {
   const { projects, config, reloadProjects, commands, ensureCommands } = useApp();
@@ -29,7 +29,7 @@ export function ProjectSettingsModal({ projectId, onClose }: { projectId: string
   useEffect(() => { void ensureCommands(projectId); }, [projectId, ensureCommands]);
 
   if (!p) return null;
-  const patch = async (b: Partial<Pick<typeof p, 'lean' | 'routing' | 'bypass' | 'model' | 'effort'>>) => { await api.patchProject(p.id, b); await reloadProjects(); };
+  const patch = async (b: Partial<Pick<typeof p, 'lean' | 'routing' | 'bypass' | 'autoCompact' | 'model' | 'effort'>>) => { await api.patchProject(p.id, b); await reloadProjects(); };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={onClose}>
@@ -50,6 +50,10 @@ export function ProjectSettingsModal({ projectId, onClose }: { projectId: string
           <Toggle
             on={!!p.routing} label="Model Routing" onClick={() => patch({ routing: !p.routing })}
             desc="Escolhe Haiku ou Sonnet por mensagem pra economizar tokens, com escalação automática se a tarefa precisar de mais raciocínio."
+          />
+          <Toggle
+            on={!!p.autoCompact} label="Auto-compactar" onClick={() => patch({ autoCompact: !p.autoCompact })}
+            desc="Após cada resposta, se o contexto passar de 60%, pergunta se quer rodar /compact pra economizar tokens."
           />
           <Toggle
             on={!!p.bypass} tone="rose" label="Bypass de permissões" onClick={() => { if (p.bypass || confirm(`Ligar bypass de permissões em "${p.name}"? Claude Code vai poder rodar comandos e editar arquivos sem pedir aprovação.`)) void patch({ bypass: !p.bypass }); }}

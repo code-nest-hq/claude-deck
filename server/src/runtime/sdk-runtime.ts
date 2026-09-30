@@ -174,6 +174,11 @@ class Live implements LiveSession {
           continue; // mapMessage não trata task_updated (não tem tool_use_id pra tagueá-lo sozinho)
         }
         for (const b of mapMessage(m)) this.out.push(b);
+        // after each turn: context occupancy for the auto-compact check ('summary' = last response's usage, no token-count calls)
+        if (m.type === 'result') {
+          const u = await this.q.getContextUsage({ detail: 'summary' }).catch(() => null);
+          if (u) this.out.push({ type: 'context.usage', percentage: u.percentage, totalTokens: u.totalTokens, maxTokens: u.rawMaxTokens });
+        }
       }
     } catch (e) {
       this.out.push({ type: 'error', code: 'exit', message: `${(e as Error).message}\n${this.stderrTail}`.trim() });

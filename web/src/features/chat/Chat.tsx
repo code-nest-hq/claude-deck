@@ -5,6 +5,7 @@ import { useApp } from '../../store';
 import { IconLock, IconShuffle } from '../../lib/icons';
 import { AskUserQuestionModal, isAskUserQuestion } from './AskUserQuestionModal';
 import { AttachMenu } from './AttachMenu';
+import { AutoCompactModal } from './AutoCompactModal';
 import { CommandsPanel } from './CommandsPanel';
 import { GitBar } from './GitBar';
 import { Markdown } from './Markdown';
@@ -244,6 +245,7 @@ export function Chat() {
         const q = chat.pending.find(isAskUserQuestion);
         return q ? <AskUserQuestionModal p={q} onAnswer={(allow, updatedInput) => answer(q.reqId, allow, updatedInput)} /> : null;
       })()}
+      <AutoCompactModal key={active.sessionId} sessionId={active.sessionId} chat={chat} enabled={!!project?.autoCompact} onCompact={() => send('/compact', false)} />
 
       <div className="relative border-t border-zinc-800/70 bg-zinc-950 p-3">
         {menuOpen && <SlashMenu items={matches} sel={Math.min(sel, matches.length - 1)} lean={!!project?.lean} onPick={pick} onHover={setSel} />}

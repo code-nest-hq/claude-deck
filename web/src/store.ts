@@ -60,7 +60,8 @@ interface App {
   addAttachment(sessionId: string, path: string): void;
   removeAttachment(sessionId: string, path: string): void;
   toggleNotify(): Promise<void>;
-  send(text: string): void;
+  /** withFiles=false leaves the pending attachments for the next message (e.g. an automatic `/compact`) */
+  send(text: string, withFiles?: boolean): void;
   interrupt(): void;
   shell(command: string): void;
   mcp(id?: string, action?: McpAction): void;
@@ -229,10 +230,10 @@ export const useApp = create<App>((set, get) => {
       set({ notifyOn: await enableNotify() });
     },
 
-    send(text) {
+    send(text, withFiles = true) {
       const a = get().active;
       if (!a) return;
-      const files = get().attachments[a.sessionId] ?? [];
+      const files = withFiles ? get().attachments[a.sessionId] ?? [] : [];
       sock?.send({ type: 'send', sessionId: a.sessionId, text, attachments: files.length ? files : undefined });
       if (files.length) set((s) => ({ attachments: { ...s.attachments, [a.sessionId]: [] } }));
     },

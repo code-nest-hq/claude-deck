@@ -99,7 +99,8 @@ export class SessionHub {
       }
       void this.pump(id, e, e.live);
     }
-    if (spec.routing) {
+    // `/compact` keeps the session's current model: no classifier call, and the summary isn't downgraded to Haiku
+    if (spec.routing && !/^\/compact(\s|$)/.test(text.trim())) {
       this.emit(id, e, { type: 'routing.started' });
       const model = await this.runtimeFor(id).classify(spec.cwd, text).catch(() => 'sonnet' as const);
       await e.live.setModel(model).catch(() => {});

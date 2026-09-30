@@ -10,7 +10,7 @@ export const uuidSchema = z.string().uuid();
 
 export interface Connection { id: string; kind: 'local' | 'ssh'; target?: string; label: string; claudePath?: string }
 export type ConnStatus = 'up' | 'down' | 'reconnecting';
-export interface Project { id: string; name: string; connectionId: string; path: string; lean: boolean; routing?: boolean; bypass?: boolean; model?: Model; effort?: Effort }
+export interface Project { id: string; name: string; connectionId: string; path: string; lean: boolean; routing?: boolean; bypass?: boolean; autoCompact?: boolean; model?: Model; effort?: Effort }
 export interface SessionMeta {
   sessionId: string; projectId: string; name?: string; model?: Model; effort?: Effort; routing?: boolean;
   tags?: string[]; favorite?: boolean; archived?: boolean; createdAt: number; lastUsedAt: number;
@@ -44,7 +44,7 @@ export interface ProjectUsageView { totalCostUsd: number; sessions: Array<{ sess
 const name = (max: number) => z.string().trim().min(1).max(max);
 export const createProjectBody = z.object({ name: name(80), path: z.string().min(1).max(1024), lean: z.boolean().default(false), connectionId: z.string().min(1).default('local') });
 export const createConnectionBody = z.object({ target: z.string().min(1).max(255), label: name(80).optional(), claudePath: z.string().max(255).optional() });
-export const patchProjectBody = z.object({ name: name(80).optional(), lean: z.boolean().optional(), routing: z.boolean().optional(), bypass: z.boolean().optional(), model: modelSchema.optional(), effort: effortSchema.optional() });
+export const patchProjectBody = z.object({ name: name(80).optional(), lean: z.boolean().optional(), routing: z.boolean().optional(), bypass: z.boolean().optional(), autoCompact: z.boolean().optional(), model: modelSchema.optional(), effort: effortSchema.optional() });
 export const patchConfigBody = z.object({ model: modelSchema.optional(), effort: effortSchema.optional() })
   .refine((b) => b.model !== undefined || b.effort !== undefined, { message: 'nada para alterar' });
 /** plan rate-limit window: utilization 0-100, resets_at ISO 8601 */
@@ -104,6 +104,10 @@ export type EventBody =
   | { type: 'permission.resolved'; reqId: string; allow: boolean }
   // modelUsage: no evento entregue ao cliente é o gasto SÓ deste turno, por modelo (delta calculado em hub.ts)
   | { type: 'turn.completed'; totals: UsageTotals; inputTokens: number; outputTokens: number; cacheCreationTokens: number; cacheReadTokens: number; modelUsage: Record<string, ModelUsage> }
+  // context window occupancy after a turn (SDK getContextUsage 'summary', no token cost); percentage is of the autocompact window
+  | { type: 'context.usage'; percentage: number; totalTokens: number; maxTokens: number }
+  // `/compact` (manual or the CLI's own auto-compact): no real progress is reported, only start and end
+  | { type: 'compact'; phase: 'started' | 'done' | 'failed'; preTokens?: number; postTokens?: number; message?: string }
   | { type: 'shell.started'; id: string; command: string }
   | ({ type: 'shell.result'; id: string } & ShellResult)
   // `/mcp` panel: servers absent = still loading (the client keeps the previous list while it refreshes)
