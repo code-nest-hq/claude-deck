@@ -18,6 +18,7 @@ const { mapMessage } = await import('../src/runtime/events');
 const { BgTasks } = await import('../src/runtime/bg-tasks');
 const { localTransport } = await import('../src/runtime/local-transport');
 const { encodeCwd } = await import('../src/ssh-util');
+const { parseHistory, jsonlTimestamps } = await import('../src/runtime/jsonl');
 
 const spec = { cwd: '/tmp/project', model: 'sonnet' as Model, effort: 'medium' as const, lean: true, routing: true, permissionMode: 'default' as const };
 const label = () => ({ projectId: 'p1', projectName: 'Test project', sessionName: 'test session' });
@@ -289,5 +290,17 @@ describe('local transport sessionExists', () => {
   test('false when missing or not a session id', async () => {
     assert.equal(await localTransport.sessionExists(randomUUID(), cwd), false);
     assert.equal(await localTransport.sessionExists('../../x', cwd), false);
+  });
+});
+
+describe('history timestamps', () => {
+  const jsonl = '{"type":"user","uuid":"u1","timestamp":"2026-10-05T12:25:10.000Z","message":{"content":"hi"}}\n{"type":"assistant","uuid":"a1","timestamp":"2026-10-05T12:25:20.000Z","message":{"content":[{"type":"text","text":"yo"}]}}\n{"type":"user","message":{"content":"no ts"}}\n';
+  test('parseHistory carries the entry timestamp (absent when missing)', () => {
+    const h = parseHistory(jsonl);
+    assert.equal(h[0].ts, Date.parse('2026-10-05T12:25:10.000Z'));
+    assert.equal(h[2].ts, undefined);
+  });
+  test('jsonlTimestamps maps uuid to epoch ms', () => {
+    assert.equal(jsonlTimestamps(jsonl).get('a1'), Date.parse('2026-10-05T12:25:20.000Z'));
   });
 });

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import type { ModelUsage, SlashCommandInfo } from '@ccui/shared';
 import { fmtTokens } from '../../lib/format';
 import { useApp } from '../../store';
@@ -62,6 +62,9 @@ function ItemView({ it, busy, bypass, commands }: { it: Item; busy: boolean; byp
   if (it.kind === 'turn') return <TurnSummary modelUsage={it.modelUsage} skills={it.skills} commands={commands} bypass={bypass} />;
   return <ToolCard it={it} />;
 }
+
+const pad = (n: number) => String(n).padStart(2, '0');
+const stamp = (ts: number) => { const d = new Date(ts); return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 
 function TurnLoading({ phase, tool, startedAt, now }: { phase: 'routing' | 'thinking'; tool?: string; startedAt: number; now: number }) {
   const secs = Math.max(0, Math.round((now - startedAt) / 1000));
@@ -138,6 +141,7 @@ export function Chat() {
   const [dismissed, setDismissed] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
   const [bgOpen, setBgOpen] = useState(false);
+  const [stampsOff, setStampsOff] = useState<Record<string, boolean>>({}); // per session; timestamps are on by default
   const end = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const mirror = useRef<HTMLDivElement>(null);
@@ -234,6 +238,7 @@ export function Chat() {
               >{running ? `● Background ${running}` : 'Background'}</button>
             );
           })()}
+          <button className={`rounded-md border px-2.5 py-1 text-xs transition-colors ${stampsOff[active.sessionId] ? 'border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-900' : 'border-zinc-700 bg-zinc-900 text-zinc-100'}`} title="Mostrar/ocultar data e hora das mensagens" onClick={() => setStampsOff((o) => ({ ...o, [active.sessionId]: !o[active.sessionId] }))}>Horário</button>
           {project && <button className="rounded-md border border-zinc-800 px-2.5 py-1 text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-900" title="ID, path, modelo e uso desta sessão" onClick={() => setStatusOpen(true)}>Status</button>}
           <button className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs transition-colors ${ui.term ? 'border-zinc-700 bg-zinc-900 text-zinc-100' : 'border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-900'}`} title="Subagentes e comandos ! (Ctrl+J)" onClick={() => setUi({ term: !ui.term })}>Terminal</button>
         </div>
@@ -246,7 +251,17 @@ export function Chat() {
       )}
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3">
-        {chat.items.map((it, i) => <ItemView key={i} it={it} busy={busy} bypass={!!project?.bypass} commands={commands} />)}
+        {chat.items.map((it, i) => {
+          // one timestamp per minute: after each user message, and after the last item of each same-minute run of output
+          const next = chat.items[i + 1];
+          const showTs = !stampsOff[active.sessionId] && it.ts !== undefined && (it.kind === 'user' || !next || next.kind === 'user' || (next.ts !== undefined && stamp(next.ts) !== stamp(it.ts)));
+          return (
+            <Fragment key={i}>
+              <ItemView it={it} busy={busy} bypass={!!project?.bypass} commands={commands} />
+              {showTs && <div className={`-mt-2 font-mono text-[10px] text-zinc-600 ${it.kind === 'user' ? 'text-right' : ''}`}>{stamp(it.ts!)}</div>}
+            </Fragment>
+          );
+        })}
         {chat.turnPhase !== 'idle' && chat.state !== 'awaiting_permission' && <TurnLoading phase={chat.turnPhase} tool={runningTool} startedAt={chat.turnPhaseAt} now={now} />}
         {chat.pending.filter((p) => !isAskUserQuestion(p)).map((p) => (
           <div key={p.reqId} className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900/50 shadow-md">

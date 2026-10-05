@@ -8,7 +8,7 @@ import { spawnManaged } from './child';
 import { activeConfigDir } from '../profiles';
 import { encodeCwd, SESSION_ID_RE } from '../ssh-util';
 import { blockText, cleanTags } from './events';
-import { costCheckpoints, lastCostState } from './jsonl';
+import { costCheckpoints, jsonlTimestamps, lastCostState } from './jsonl';
 import type { Transport } from './types';
 
 export { reportOrphans } from './child';
@@ -67,10 +67,12 @@ export const localTransport: Transport = {
   async history(sessionId, cwd) {
     let msgs: Awaited<ReturnType<typeof getSessionMessages>> = [];
     try { msgs = await getSessionMessages(sessionId, { dir: cwd }); } catch { /* sessão ainda sem jsonl */ }
+    const stamps = await fs.readFile(sessionFile(sessionId, cwd), 'utf8').then(jsonlTimestamps, () => new Map<string, number>());
     return msgs.flatMap((m): HistoryItem[] => {
       if (m.type === 'system') return [];
       const text = cleanTags(blockText((m.message as { content?: unknown } | null)?.content));
-      return text ? [{ role: m.type, text }] : [];
+      const ts = stamps.get(m.uuid);
+      return text ? [{ role: m.type, text, ...(ts ? { ts } : {}) }] : [];
     });
   },
 

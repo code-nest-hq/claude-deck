@@ -127,7 +127,7 @@ export type EventBody =
   // errorId: key of the entry in the daily error log (Logs page), shown next to the error so it can be looked up
   | { type: 'error'; code: 'runtime' | 'exit'; message: string; errorId?: string };
 export type ClaudeEvent = EventBody & { sessionId: string; seq: number; ts: number };
-export interface HistoryItem { role: 'user' | 'assistant'; text: string }
+export interface HistoryItem { role: 'user' | 'assistant'; text: string; ts?: number }
 // acumulado da sessão (todas as execuções, inclusive antes de um resume); custo é ESTIMATIVA a preço de API (não é cobrança em plano de assinatura)
 export interface UsageTotals { costUsd: number; input: number; output: number; cacheCreation: number; cacheRead: number }
 export interface ModelUsage { input: number; output: number; cacheCreation: number; cacheRead: number; costUsd: number }

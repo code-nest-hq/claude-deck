@@ -1,7 +1,7 @@
 import { ZERO_TOTALS, type HistoryItem, type ModelUsage, type UsageTotals } from '@ccui/shared';
 import { blockText, cleanTags, rawModelUsage, sumUsage } from './events';
 
-interface Entry { type?: string; isSidechain?: boolean; isMeta?: boolean; message?: { content?: unknown } }
+interface Entry { type?: string; uuid?: string; timestamp?: string; isSidechain?: boolean; isMeta?: boolean; message?: { content?: unknown } }
 
 // jsonl do Claude Code -> histórico de texto (mesmo formato que o getSessionMessages local entrega)
 export function parseHistory(jsonl: string): HistoryItem[] {
@@ -12,7 +12,22 @@ export function parseHistory(jsonl: string): HistoryItem[] {
     try { e = JSON.parse(line); } catch { continue; } // linha cortada por head/tail
     if ((e.type !== 'user' && e.type !== 'assistant') || e.isSidechain || e.isMeta) continue;
     const text = cleanTags(blockText(e.message?.content));
-    if (text) out.push({ role: e.type, text });
+    const ts = e.timestamp ? Date.parse(e.timestamp) : NaN;
+    if (text) out.push({ role: e.type, text, ...(Number.isFinite(ts) ? { ts } : {}) });
+  }
+  return out;
+}
+
+// uuid -> epoch ms of each user/assistant entry (the local history comes from the SDK, which drops the timestamp)
+export function jsonlTimestamps(jsonl: string): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const line of jsonl.split('\n')) {
+    if (!line.includes('"timestamp"')) continue;
+    try {
+      const e = JSON.parse(line) as Entry;
+      const ts = e.timestamp ? Date.parse(e.timestamp) : NaN;
+      if (e.uuid && Number.isFinite(ts)) out.set(e.uuid, ts);
+    } catch { /* partial line */ }
   }
   return out;
 }

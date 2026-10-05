@@ -1,13 +1,15 @@
 import { ZERO_TOTALS, type BgTask, type ClaudeEvent, type McpServerView, type Model, type ModelUsage, type PendingPermission, type ServerMsg, type SessionState, type UsageTotals } from '@ccui/shared';
 
-export type Item =
+// ts = event time (ms), set by applyEvent; history from the snapshot has none
+export type Item = (
   | { kind: 'user'; text: string; routedModel?: Model }
   | { kind: 'assistant'; text: string; streaming?: boolean }
   | { kind: 'tool'; toolUseId: string; name: string; input: unknown; output?: string; isError?: boolean }
   | { kind: 'shell'; id: string; command: string; output?: string; exitCode?: number | null; truncated?: boolean }
   | { kind: 'mcp'; id: string; servers?: McpServerView[]; loading: boolean; error?: string }
   | { kind: 'turn'; modelUsage: Record<string, ModelUsage>; skills: SkillUse[] }
-  | { kind: 'error'; text: string; errorId?: string };
+  | { kind: 'error'; text: string; errorId?: string }
+) & { ts?: number };
 
 // a skill used in a turn: typed by the user as "/name" (a candidate: the view keeps only known non-builtin commands)
 // or invoked by Claude through the Skill tool
@@ -41,7 +43,7 @@ export const emptyChat = (): Chat => ({ hydrated: false, items: [], state: 'idle
 export function applySnapshot(s: Extract<ServerMsg, { type: 'snapshot' }>): Chat {
   return {
     hydrated: true,
-    items: s.history.map((h) => ({ kind: h.role, text: h.text })),
+    items: s.history.map((h) => ({ kind: h.role, text: h.text, ts: h.ts })),
     state: s.state,
     lastSeq: s.lastSeq,
     totals: s.totals,
@@ -180,6 +182,11 @@ export function applyEvent(c: Chat, ev: ClaudeEvent): Chat {
     case 'error':
       items.push({ kind: 'error', text: ev.message, errorId: ev.errorId });
       break;
+  }
+  // stamp new items with the event time; replaced ones (streaming text, tool output) keep the original
+  for (let i = Math.max(c.items.length - 1, 0); i < items.length; i++) {
+    const ts = i < c.items.length ? c.items[i].ts : ev.ts;
+    if (ts !== undefined && items[i].ts !== ts) items[i] = { ...items[i], ts };
   }
   return next;
 }
