@@ -1,12 +1,16 @@
 import { randomUUID } from 'node:crypto';
-import { ZERO_TOTALS, type ClaudeEvent, type EventBody, type McpAction, type ModelUsage, type PendingPermission, type ServerMsg, type SessionState, type UsageTotals } from '@ccui/shared';
-import type { ClaudeRuntime, LiveSession, OpenOptions } from './runtime/types';
+import { ZERO_TOTALS, type BgTask, type ClaudeEvent, type EventBody, type McpAction, type Model, type ModelUsage, type PendingPermission, type ServerMsg, type SessionState, type UsageTotals } from '@ccui/shared';
+import { logError } from './logs';
+import { recordSession } from './session-log';
+import type { Classification, ClaudeRuntime, LiveSession, OpenOptions } from './runtime/types';
 
 const BUFFER = 2000;
 const INTERRUPT_GRACE_MS = 5000;
 
 export interface Client { send(m: ServerMsg): void; sessions: Set<string> }
 export type OpenSpec = Omit<OpenOptions, 'sessionId'>;
+/** who a session belongs to, for the error log */
+export interface SessionLabel { projectId?: string; projectName?: string; sessionName?: string; connectionId?: string }
 
 interface Entry {
   seq: number;
@@ -21,6 +25,25 @@ interface Entry {
   // ponytail: snapshot cumulativo por-modelo só desta execução (não lido do jsonl); no 1º turno após reabrir a sessão
   // o delta calculado é o acumulado inteiro, não só o turno — aceitável, é só o resumo exibido no terminal
   prevModelUsage: Record<string, ModelUsage> | null;
+  bgTasks: BgTask[]; // last bg.tasks list, sent in the snapshot
+  compactBy?: 'user' | 'deck-auto'; // who asked for the /compact in flight; none when its 'started' arrives = the CLI's own auto-compact
+}
+
+// the debug-relevant part of an event for the log's recent-events trail (no streamed text, no big tool payloads)
+function summary(ev: ClaudeEvent): Record<string, unknown> {
+  const cut = (v: unknown, n = 300) => (typeof v === 'string' ? v.slice(0, n) : JSON.stringify(v ?? null).slice(0, n));
+  switch (ev.type) {
+    case 'session.state': return { state: ev.state };
+    case 'user.message': case 'message.completed': return { text: cut(ev.text) };
+    case 'model.routed': return { model: ev.model };
+    case 'tool.started': return { name: ev.name, input: cut(ev.input) };
+    case 'tool.result': return { toolUseId: ev.toolUseId, isError: ev.isError, output: cut(ev.output) };
+    case 'error': return { code: ev.code, message: cut(ev.message, 1000), errorId: ev.errorId };
+    case 'turn.completed': return { costUsd: ev.totals.costUsd };
+    case 'context.usage': return { percentage: ev.percentage };
+    case 'compact': return { phase: ev.phase };
+    default: return {};
+  }
 }
 
 // cumulativo atual menos o snapshot anterior, por modelo; negativo vira 0 (defensivo)
@@ -42,12 +65,16 @@ function diffModelUsage(prev: Record<string, ModelUsage>, cur: Record<string, Mo
 
 export class SessionHub {
   private entries = new Map<string, Entry>();
-  constructor(private runtimeFor: (sessionId: string) => ClaudeRuntime, private spec: (sessionId: string) => OpenSpec) {}
+  constructor(
+    private runtimeFor: (sessionId: string) => ClaudeRuntime,
+    private spec: (sessionId: string) => OpenSpec,
+    private label: (sessionId: string) => SessionLabel = () => ({}),
+  ) {}
 
   private entry(id: string): Entry {
     let e = this.entries.get(id);
     if (!e) {
-      e = { seq: 0, buffer: [], state: 'idle', live: null, clients: new Set(), pending: new Map(), shellRunning: false, mcpRunning: false, totals: null, prevModelUsage: null };
+      e = { seq: 0, buffer: [], state: 'idle', live: null, clients: new Set(), pending: new Map(), shellRunning: false, mcpRunning: false, totals: null, prevModelUsage: null, bgTasks: [] };
       this.entries.set(id, e);
     }
     return e;
@@ -64,7 +91,7 @@ export class SessionHub {
       e.prevModelUsage = stored.modelUsage; // idem por-modelo, pro 1º turno desta execução calcular o delta certo (só o turno, não a sessão)
     }
     // estado lido DEPOIS do await: eventos emitidos durante a leitura já foram enviados a `c` e o cliente os ignora até hidratar
-    c.send({ type: 'snapshot', sessionId: id, history, state: e.state, lastSeq: e.seq, totals: e.totals ?? ZERO_TOTALS, pending: [...e.pending.values()] });
+    c.send({ type: 'snapshot', sessionId: id, history, state: e.state, lastSeq: e.seq, totals: e.totals ?? ZERO_TOTALS, pending: [...e.pending.values()], bgTasks: e.bgTasks });
   }
 
   async attach(c: Client, id: string, afterSeq?: number) {
@@ -84,11 +111,26 @@ export class SessionHub {
   detach(c: Client, id: string) { this.entries.get(id)?.clients.delete(c); c.sessions.delete(id); }
   drop(c: Client) { for (const id of c.sessions) this.entries.get(id)?.clients.delete(c); c.sessions.clear(); }
 
-  async send(id: string, text: string, attachments: string[] = []): Promise<'ok' | 'busy'> {
+  async send(id: string, text: string, attachments: string[] = [], origin?: 'auto-compact'): Promise<'ok' | 'busy'> {
     const spec = this.spec(id);
     const e = this.entry(id);
     if (e.state === 'running' || e.state === 'awaiting_permission') return 'busy';
     this.setState(id, e, 'running'); // reserva antes do await para não abrir dois processos
+    const isCompact = /^\/compact(\s|$)/.test(text.trim());
+    if (isCompact) {
+      e.compactBy = origin === 'auto-compact' ? 'deck-auto' : 'user';
+      recordSession(id, 'compact.requested', { by: e.compactBy });
+    }
+    // classify BEFORE taking the process: the process may exit during the (up to 15 s) classifier call,
+    // so nothing may hold on to e.live across that await
+    // `/compact` keeps the session's current model: no classifier call, and the summary isn't downgraded to Haiku
+    let model: Model | undefined;
+    if (spec.routing && !isCompact) {
+      this.emit(id, e, { type: 'routing.started' });
+      const c: Classification = await this.runtimeFor(id).classify(spec.cwd, text).catch((): Classification => ({ model: 'sonnet', source: 'fallback', durationMs: 0 }));
+      model = c.model;
+      recordSession(id, 'routing.classified', { model: c.model, source: c.source, costUsd: c.costUsd, durationMs: c.durationMs });
+    }
     if (!e.live) {
       try {
         e.live = await this.runtimeFor(id).open({ ...spec, sessionId: id });
@@ -97,16 +139,16 @@ export class SessionHub {
         this.setState(id, e, 'idle');
         return 'ok';
       }
+      recordSession(id, 'process.open', { spec, resumed: e.live.resumed });
       void this.pump(id, e, e.live);
     }
-    if (spec.routing) {
-      this.emit(id, e, { type: 'routing.started' });
-      const model = await this.runtimeFor(id).classify(spec.cwd, text).catch(() => 'sonnet' as const);
-      await e.live.setModel(model).catch(() => {});
+    const live = e.live;
+    if (model) {
+      await live.setModel(model).catch(() => {});
       this.emit(id, e, { type: 'model.routed', model });
     }
     this.emit(id, e, { type: 'user.message', text });
-    e.live.send(text, attachments);
+    live.send(text, attachments);
     return 'ok';
   }
 
@@ -132,6 +174,7 @@ export class SessionHub {
     const e = this.entry(id);
     if (e.mcpRunning) return 'busy';
     e.mcpRunning = true;
+    if (action) recordSession(id, 'action', { action: 'mcp', mcpAction: action });
     const mid = cardId ?? randomUUID();
     this.emit(id, e, { type: 'mcp.status', id: mid });
     try {
@@ -150,26 +193,45 @@ export class SessionHub {
     const e = this.entries.get(id);
     if (!e?.live) return null;
     if (e.state === 'running' || e.state === 'awaiting_permission') return 'busy';
+    recordSession(id, 'action', { action: 'reload' });
     return e.live.reload();
   }
 
+  // background task modal: null = no live process (the tasks died with it)
+  async bgOutput(id: string, taskId: string) {
+    this.spec(id);
+    const live = this.entries.get(id)?.live;
+    return live ? { live: true, output: await live.bgOutput(taskId) } : { live: false, output: null };
+  }
+  async stopTask(id: string, taskId: string) {
+    this.spec(id);
+    const live = this.entries.get(id)?.live;
+    if (!live) return false;
+    recordSession(id, 'action', { action: 'stopTask', taskId });
+    await live.stopTask(taskId);
+    return true;
+  }
+
   private async pump(id: string, e: Entry, live: LiveSession) {
-    let crashed = false;
+    let crash: EventBody | null = null;
     for await (const b of live.events) {
-      if (b.type === 'error' && b.code === 'exit') crashed = true;
-      this.emit(id, e, b);
+      const ev = this.emit(id, e, b);
+      if (ev.type === 'error' && ev.code === 'exit') crash = ev;
     }
     e.live = null;
     e.pending.clear();
     this.setState(id, e, 'exited');
-    if (crashed) void this.recover(id, e);
+    recordSession(id, 'process.exit', { crash: !!crash });
+    if (crash) void this.recover(id, e, crash);
   }
 
   // queda de SSH/crash: o claude remoto termina o turno sozinho; espera ele sair e reenvia o histórico completo
-  private async recover(id: string, e: Entry) {
+  // the snapshot rebuilds the chat from the jsonl, which never has the crash: the error (same errorId, not logged again) is re-sent after it
+  private async recover(id: string, e: Entry, crash: EventBody) {
     try {
       await this.runtimeFor(id).settle(id, this.spec(id).cwd);
       for (const c of e.clients) await this.snapshot(c, id, e);
+      this.emit(id, e, crash);
     } catch { /* conexão ainda fora: o usuário reabre a sessão depois */ }
   }
 
@@ -177,11 +239,18 @@ export class SessionHub {
     const e = this.entries.get(id);
     const live = e?.live;
     if (!e || !live) return;
+    recordSession(id, 'action', { action: 'interrupt', state: e.state });
     await live.interrupt().catch(() => {});
     // sem sair de running em 5 s => encerra o processo (a sessão continua retomável)
     setTimeout(() => {
       if (e.live === live && (e.state === 'running' || e.state === 'awaiting_permission')) void live.close();
     }, INTERRUPT_GRACE_MS);
+  }
+
+  /** the web asked "compact?" (auto-compact) and the user said no */
+  compactDeclined(id: string, percentage: number) {
+    this.spec(id);
+    recordSession(id, 'compact.declined', { percentage });
   }
 
   answerPermission(id: string, reqId: string, allow: boolean, updatedInput?: Record<string, unknown>) {
@@ -192,7 +261,20 @@ export class SessionHub {
     await Promise.all([...this.entries.values()].map((e) => e.live?.close()));
   }
 
-  private emit(id: string, e: Entry, body: EventBody) {
+  // every session error goes to the daily log once (the event carries its errorId from then on)
+  private logSessionError(id: string, e: Entry, body: Extract<EventBody, { type: 'error' }>): string {
+    let spec: OpenSpec | undefined;
+    try { spec = this.spec(id); } catch { /* unknown session */ }
+    const recent = e.buffer.filter((x) => x.type !== 'message.delta').slice(-20)
+      .map((x) => ({ seq: x.seq, ts: new Date(x.ts).toISOString(), type: x.type, ...summary(x) }));
+    return logError({
+      level: 'error', source: 'session', code: body.code, message: body.message, sessionId: id, ...this.label(id),
+      context: { spec, state: e.state, live: !!e.live, pendingPermissions: e.pending.size, seq: e.seq, totals: e.totals, recentEvents: recent },
+    });
+  }
+
+  private emit(id: string, e: Entry, body: EventBody): ClaudeEvent {
+    if (body.type === 'error' && !body.errorId) body = { ...body, errorId: this.logSessionError(id, e, body) };
     if (body.type === 'turn.completed') {
       const cumulative = body.modelUsage;
       body = { ...body, modelUsage: diffModelUsage(e.prevModelUsage ?? {}, cumulative) };
@@ -201,6 +283,12 @@ export class SessionHub {
     const ev = { ...body, sessionId: id, seq: ++e.seq, ts: Date.now() } as ClaudeEvent;
     e.buffer.push(ev);
     if (e.buffer.length > BUFFER) e.buffer.shift();
+    if (body.type !== 'message.delta') { // the transcript has the streamed text; everything else is the app's own view
+      const { type, ...fields } = body;
+      const by = body.type === 'compact' && body.phase === 'started' ? { by: e.compactBy ?? 'cli-auto' } : {};
+      recordSession(id, type, { seq: ev.seq, ...fields, ...by }, ev.ts);
+      if (body.type === 'compact' && body.phase === 'started') e.compactBy = undefined;
+    }
     for (const c of e.clients) c.send({ type: 'event', event: ev });
     switch (body.type) {
       case 'permission.requested':
@@ -211,11 +299,21 @@ export class SessionHub {
         e.pending.delete(body.reqId);
         if (e.pending.size === 0 && e.state === 'awaiting_permission') this.setState(id, e, 'running');
         break;
+      // a turn the CLI starts by itself (a background task finished: <task-notification>) has no send(): mark it running here
+      case 'message.delta':
+      case 'message.completed':
+      case 'tool.started':
+        if (e.state === 'idle' && e.live) this.setState(id, e, 'running');
+        break;
+      case 'bg.tasks':
+        e.bgTasks = body.tasks;
+        break;
       case 'turn.completed':
         e.totals = body.totals;
         this.setState(id, e, 'idle');
         break;
     }
+    return ev;
   }
 
   private setState(id: string, e: Entry, s: SessionState) {

@@ -5,8 +5,9 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { Hono } from 'hono';
 import type { ServerMsg } from '@ccui/shared';
 import { Connections } from './connections';
-import { connectionIdFor, openSpecFor } from './domain';
+import { connectionIdFor, openSpecFor, sessionLabel } from './domain';
 import { SessionHub } from './hub';
+import { errInfo, logError, logErrorSync, onLog } from './logs';
 import { initProfiles } from './profiles';
 import { buildApi } from './routes';
 import { reportOrphans } from './runtime/local-transport';
@@ -26,12 +27,21 @@ await initProfiles(store);
 reportOrphans();
 let broadcast: (m: ServerMsg) => void = () => {};
 const conns = new Connections(store, (id, status, message) => broadcast({ type: 'connection.status', id, status, message }));
-const hub = new SessionHub((sid) => conns.get(connectionIdFor(store, sid)).runtime, (id) => openSpecFor(store, id));
+const hub = new SessionHub((sid) => conns.get(connectionIdFor(store, sid)).runtime, (id) => openSpecFor(store, id), (id) => sessionLabel(store, id));
+onLog((entry) => broadcast({ type: 'log', entry }));
+// monitor only: logs the crash (sync, the process is going down) without changing Node's default behavior
+process.on('uncaughtExceptionMonitor', (err, origin) => {
+  logErrorSync({ level: 'error', source: 'process', code: origin, ...errInfo(err), context: { pid: process.pid, node: process.version, uptimeS: Math.round(process.uptime()) } });
+});
 const token = makeToken();
 
 const app = new Hono();
 app.use('*', guard(PORT, token));
 app.route('/api', buildApi({ store, hub, conns }));
+app.onError((err, c) => {
+  const errorId = logError({ level: 'error', source: 'http', code: 'http_500', ...errInfo(err), context: { method: c.req.method, path: c.req.path } });
+  return c.json({ error: err.message, errorId }, 500);
+});
 app.use('/*', serveStatic({ root: './web/dist' }));
 
 const server = serve({ fetch: app.fetch, hostname: HOST, port: PORT }) as Server;

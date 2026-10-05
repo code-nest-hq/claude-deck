@@ -3,8 +3,9 @@ import type { Duplex } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import { ClientMsg, type ConnStatus, type ServerMsg } from '@ccui/shared';
 import { blockedSlash } from './commands';
-import { ensureMeta, touch } from './domain';
+import { ensureMeta, sessionLabel, touch } from './domain';
 import type { Client, SessionHub } from './hub';
+import { errInfo, logError } from './logs';
 import { hostOriginOk, tokenOk } from './security';
 import type { Store } from './store';
 
@@ -41,6 +42,15 @@ export function attachWs(server: Server, o: { port: number; token: string; hub: 
         return;
       }
       if (!ok) return ws.close(4401, 'auth');
+      // rejected/failed request: logged (warn for expected refusals like busy/blocked) and sent with its errorId
+      const fail = (code: string, message: string, level: 'error' | 'warn', err?: unknown) => {
+        const sid = 'sessionId' in m ? m.sessionId : undefined;
+        const errorId = logError({
+          level, source: 'ws', code, ...(err ? errInfo(err) : { message }), sessionId: sid, ...(sid ? sessionLabel(o.store, sid) : {}),
+          context: { request: m.type === 'send' ? { ...m, text: m.text.slice(0, 2000) } : m },
+        });
+        client.send({ type: 'error', code, message, errorId });
+      };
       try {
         switch (m.type) {
           case 'attach':
@@ -50,23 +60,24 @@ export function attachWs(server: Server, o: { port: number; token: string; hub: 
           case 'detach': o.hub.detach(client, m.sessionId); break;
           case 'send': {
             const why = blockedSlash(m.text);
-            if (why) { client.send({ type: 'error', code: 'blocked', message: why }); break; }
+            if (why) { fail('blocked', why, 'warn'); break; }
             touch(o.store, m.sessionId);
-            if ((await o.hub.send(m.sessionId, m.text, m.attachments)) === 'busy') client.send({ type: 'error', code: 'busy', message: 'sessão ocupada' });
+            if ((await o.hub.send(m.sessionId, m.text, m.attachments, m.origin)) === 'busy') fail('busy', 'sessão ocupada', 'warn');
             break;
           }
+          case 'compact.declined': o.hub.compactDeclined(m.sessionId, m.percentage); break;
           case 'interrupt': await o.hub.interrupt(m.sessionId); break;
           case 'shell':
             touch(o.store, m.sessionId);
-            if ((await o.hub.shell(m.sessionId, m.command)) === 'busy') client.send({ type: 'error', code: 'busy', message: 'já há um comando shell em execução nesta sessão' });
+            if ((await o.hub.shell(m.sessionId, m.command)) === 'busy') fail('busy', 'já há um comando shell em execução nesta sessão', 'warn');
             break;
           case 'mcp':
-            if ((await o.hub.mcp(m.sessionId, m.id, m.action)) === 'busy') client.send({ type: 'error', code: 'busy', message: 'an /mcp request is already running in this session' });
+            if ((await o.hub.mcp(m.sessionId, m.id, m.action)) === 'busy') fail('busy', 'an /mcp request is already running in this session', 'warn');
             break;
           case 'permission': o.hub.answerPermission(m.sessionId, m.reqId, m.allow, m.updatedInput); break;
         }
       } catch (e) {
-        client.send({ type: 'error', code: 'runtime', message: (e as Error).message });
+        fail('runtime', (e as Error).message, 'error', e);
       }
     });
 

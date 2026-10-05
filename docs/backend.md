@@ -9,8 +9,11 @@ Node.js + Hono + WebSocket. No Controller/Service/Repository — modules are fil
 - `domain.ts` — `openSpecFor()` builds the `OpenSpec` (session->project->config hierarchy), `ensureMeta`, `touch`, `listProjectSessions`, `connectionIdFor`.
 - `store.ts` — `JsonFile<T>` (atomic read/write with `.bak`), `openStore()` loads `config.json`/`projects.json`/`sessions.json`, `acquireLock()` — one backend per `DATA_DIR` via `~/.code-nest/lock` (PID).
 - `connections.ts` — `Connections`: active runtimes (local + configured SSH connections), periodically monitors SSH status.
-- `ws.ts` — `attachWs`: token-based auth handshake, dispatches client messages (`attach`, `detach`, `send`, `interrupt`, `shell`, `mcp`, `permission`); `send` is rejected with an explanation when `blockedSlash()` matches.
-- `routes.ts` — REST API: `/api/state`, `/api/config`, `/api/connections` (+ `/test`, `/:id/browse` folder browser), `/api/projects` (+ `/:id/sessions`, `/:id/commands`, `/:id/git`, `/:id/usage`), `/api/sessions/:id`, `/api/usage/today`, `/api/profiles` (+ `/:id/activate|login|login/code|logout`, `GET /:id/usage`, `DELETE /:id`).
+- `ws.ts` — `attachWs`: token-based auth handshake, dispatches client messages (`attach`, `detach`, `send`, `interrupt`, `shell`, `mcp`, `permission`, `compact.declined`); `send` is rejected with an explanation when `blockedSlash()` matches.
+- `routes.ts` — REST API: `/api/state`, `/api/config`, `/api/connections` (+ `/test`, `/:id/browse` folder browser), `/api/projects` (+ `/:id/sessions`, `/:id/commands`, `/:id/git`, `/:id/sessions/:sid/status|export|reload|bg/...`), `/api/sessions/:id`, `/api/profiles` (+ `/:id/activate|login|login/code|logout`, `GET /:id/usage`, `DELETE /:id`).
+- `session-log.ts` — per-session Deck-side log: `recordSession` appends one JSON line to `<data dir>/session-logs/<sessionId>.jsonl` (same serialized append chain as `logs.ts`; never throws), `readSessionLog`, `flushSessionLog`.
+- `export.ts` — `buildExport()`: the session export (see `docs/architecture.md` §Session export). Pure function; `routes.ts` does the IO.
+- `redact.ts` — `redactString`/`redactDeep`: best-effort secret masking used by the export.
 - `security.ts` — `guard` (token/host check), `makeToken`.
 - `ssh-util.ts` — SSH helpers: `claudeExpr`, `encodeCwd`, `explainSshError`, `runSsh`, `shq` (shell-quote), `sshArgv`, `SESSION_ID_RE`.
 - `commands.ts` — `blockedSlash` (rejects `/clear`, `/model`, `/fast`, `/advisor`, `/effort`, `/config` with a reason) and `visibleCommands` (drops blocked and terminal-only commands from the autocomplete list).
@@ -19,14 +22,14 @@ Node.js + Hono + WebSocket. No Controller/Service/Repository — modules are fil
 
 ### `runtime/`
 
-- `types.ts` — the `Transport`, `OpenOptions`, `LiveSession`, `ClaudeRuntime` interfaces (see `docs/architecture.md`).
+- `types.ts` — the `Transport` (incl. `readTranscript`: a session's raw jsonl + its subagents' jsonl), `OpenOptions`, `LiveSession`, `ClaudeRuntime` (`classify` returns a `Classification`: model, source, classifier cost) interfaces (see `docs/architecture.md`).
 - `sdk-runtime.ts` — `SdkRuntime` (the single `ClaudeRuntime` implementation) + the internal `Live` class (`LiveSession`). Uses `@anthropic-ai/claude-agent-sdk`: `query()`, `tool()`, `createSdkMcpServer()`, `canUseTool`. Contains `forbiddenModel`, the classifier (`classify`/`classifyViaHaiku`), the routing escalation MCP server, attachment reading (`attachmentBlocks`), and the `/mcp` status/actions (`mcpStatus`, used by both `Live.mcp` and the short-lived `SdkRuntime.mcp`).
 - `local-transport.ts` — the local `Transport` (spawns `claude` directly), `reportOrphans()`.
 - `ssh-transport.ts` — the SSH `Transport` (`sshTransport(conn)`), see decisions in `docs/architecture.md` §Remote/SSH.
 - `child.ts` — `spawnManaged` (detached process, own process group, cascading kill), `run.json` (PID registry for orphan warnings, not a lock).
 - `events.ts` — `mapMessage()`: translates SDK messages into the protocol's `EventBody`.
 - `routing.ts` — `classifyHeuristic`, `CLASSIFY_SYSTEM_PROMPT` (see Model Routing in `docs/architecture.md`).
-- `jsonl.ts` — parses the Claude Code jsonl: `parseHistory`, `firstPrompt`, `lastCostState`, `costCheckpoints` (spend dashboard).
+- `jsonl.ts` — parses the Claude Code jsonl: `parseHistory`, `firstPrompt`, `lastCostState`, `jsonlTimestamps`, `parseRemoteTranscript` (the SSH `readTranscript` output).
 
 ## SessionHub
 

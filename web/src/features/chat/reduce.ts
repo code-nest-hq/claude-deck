@@ -1,13 +1,15 @@
-import { ZERO_TOTALS, type ClaudeEvent, type McpServerView, type Model, type ModelUsage, type PendingPermission, type ServerMsg, type SessionState, type UsageTotals } from '@ccui/shared';
+import { ZERO_TOTALS, type BgTask, type ClaudeEvent, type McpServerView, type Model, type ModelUsage, type PendingPermission, type ServerMsg, type SessionState, type UsageTotals } from '@ccui/shared';
 
-export type Item =
+// ts = event time (ms), set by applyEvent; history from the snapshot has none
+export type Item = (
   | { kind: 'user'; text: string; routedModel?: Model }
   | { kind: 'assistant'; text: string; streaming?: boolean }
   | { kind: 'tool'; toolUseId: string; name: string; input: unknown; output?: string; isError?: boolean }
   | { kind: 'shell'; id: string; command: string; output?: string; exitCode?: number | null; truncated?: boolean }
   | { kind: 'mcp'; id: string; servers?: McpServerView[]; loading: boolean; error?: string }
   | { kind: 'turn'; modelUsage: Record<string, ModelUsage>; skills: SkillUse[] }
-  | { kind: 'error'; text: string };
+  | { kind: 'error'; text: string; errorId?: string }
+) & { ts?: number };
 
 // a skill used in a turn: typed by the user as "/name" (a candidate: the view keeps only known non-builtin commands)
 // or invoked by Claude through the Skill tool
@@ -27,29 +29,34 @@ export interface Chat {
   pending: PendingPermission[];
   lastEventAt: number;
   tasks: TaskEntry[];
+  bgTasks: BgTask[]; // background tasks (Background modal); from the snapshot, then replaced by each bg.tasks
   pendingRoutedModel?: Model; // "prateleira" pro modelo escolhido; consumido pelo próximo user.message
   turnPhase: 'idle' | 'routing' | 'thinking'; // indicador de progresso enquanto não chega nenhum conteúdo do turno
   turnPhaseAt: number;
+  // last context occupancy (seq = its event, so the auto-compact prompt fires once per turn)
+  context?: { percentage: number; totalTokens: number; maxTokens: number; seq: number };
+  compact?: { phase: 'running' | 'done' | 'failed'; startedAt: number; seq: number; preTokens?: number; postTokens?: number; message?: string };
 }
 
-export const emptyChat = (): Chat => ({ hydrated: false, items: [], state: 'idle', lastSeq: 0, totals: ZERO_TOTALS, pending: [], lastEventAt: Date.now(), tasks: [], turnPhase: 'idle', turnPhaseAt: 0 });
+export const emptyChat = (): Chat => ({ hydrated: false, items: [], state: 'idle', lastSeq: 0, totals: ZERO_TOTALS, pending: [], lastEventAt: Date.now(), tasks: [], bgTasks: [], turnPhase: 'idle', turnPhaseAt: 0 });
 
 export function applySnapshot(s: Extract<ServerMsg, { type: 'snapshot' }>): Chat {
   return {
     hydrated: true,
-    items: s.history.map((h) => ({ kind: h.role, text: h.text })),
+    items: s.history.map((h) => ({ kind: h.role, text: h.text, ts: h.ts })),
     state: s.state,
     lastSeq: s.lastSeq,
     totals: s.totals,
     pending: s.pending,
     lastEventAt: Date.now(),
+    bgTasks: s.bgTasks,
     tasks: [], // subagentes não persistem entre reconexões (fora de escopo, ver spec)
     turnPhase: 'idle',
     turnPhaseAt: 0,
   };
 }
 
-export const addError = (c: Chat, text: string): Chat => ({ ...c, items: [...c.items, { kind: 'error', text }] });
+export const addError = (c: Chat, text: string, errorId?: string): Chat => ({ ...c, items: [...c.items, { kind: 'error', text, errorId }] });
 
 // injeta um item novo dentro do TaskEntry certo; cria o task defensivamente se task.started ainda não chegou
 function upsertTaskItem(tasks: TaskEntry[], taskId: string, item: Item): TaskEntry[] {
@@ -161,9 +168,25 @@ export function applyEvent(c: Chat, ev: ClaudeEvent): Chat {
       // resumo só deste turno (com modelo usado); mostrado no terminal, não na conversa principal (ItemView ignora 'turn')
       if (Object.keys(ev.modelUsage).length > 0) items.push({ kind: 'turn', modelUsage: ev.modelUsage, skills: turnSkills(items) });
       break;
-    case 'error':
-      items.push({ kind: 'error', text: ev.message });
+    case 'bg.tasks':
+      next.bgTasks = ev.tasks;
       break;
+    case 'context.usage':
+      next.context = { percentage: ev.percentage, totalTokens: ev.totalTokens, maxTokens: ev.maxTokens, seq: ev.seq };
+      break;
+    case 'compact':
+      next.compact = ev.phase === 'started'
+        ? { phase: 'running', startedAt: ev.ts, seq: ev.seq }
+        : { startedAt: c.compact?.startedAt ?? ev.ts, seq: ev.seq, phase: ev.phase, preTokens: ev.preTokens, postTokens: ev.postTokens, message: ev.message };
+      break;
+    case 'error':
+      items.push({ kind: 'error', text: ev.message, errorId: ev.errorId });
+      break;
+  }
+  // stamp new items with the event time; replaced ones (streaming text, tool output) keep the original
+  for (let i = Math.max(c.items.length - 1, 0); i < items.length; i++) {
+    const ts = i < c.items.length ? c.items[i].ts : ev.ts;
+    if (ts !== undefined && items[i].ts !== ts) items[i] = { ...items[i], ts };
   }
   return next;
 }

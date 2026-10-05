@@ -10,7 +10,7 @@ export const uuidSchema = z.string().uuid();
 
 export interface Connection { id: string; kind: 'local' | 'ssh'; target?: string; label: string; claudePath?: string }
 export type ConnStatus = 'up' | 'down' | 'reconnecting';
-export interface Project { id: string; name: string; connectionId: string; path: string; lean: boolean; routing?: boolean; bypass?: boolean; model?: Model; effort?: Effort }
+export interface Project { id: string; name: string; connectionId: string; path: string; lean: boolean; routing?: boolean; bypass?: boolean; autoCompact?: boolean; model?: Model; effort?: Effort }
 export interface SessionMeta {
   sessionId: string; projectId: string; name?: string; model?: Model; effort?: Effort; routing?: boolean;
   tags?: string[]; favorite?: boolean; archived?: boolean; createdAt: number; lastUsedAt: number;
@@ -33,18 +33,21 @@ export interface ProfileView {
   credentials: { expiresAt?: number; refreshTokenExpiresAt?: number; scopes?: string[]; subscriptionType?: string; rateLimitTier?: string } | null;
   login: { running: boolean; url?: string; output: string } | null;
 }
+/** Status modal: the session's meta plus the effective settings its process opens with (session > project > global defaults) */
+export interface SessionStatus {
+  meta: SessionMeta; live: boolean;
+  model: Model; effort: Effort; routing: boolean; lean: boolean; permissionMode: 'default' | 'plan' | 'bypassPermissions';
+}
 export interface SessionRow { sessionId: string; name: string; lastModified: number; live: boolean; tags: string[]; favorite: boolean; archived: boolean }
 export interface SlashCommandInfo { name: string; description: string; argumentHint: string; aliases?: string[]; builtin: boolean }
 export interface GitInfo { branch: string | null; ahead: number; behind: number; changed: number; untracked: number }
 export interface DirEntry { name: string; isDir: boolean }
 export const LOCAL: Connection = { id: 'local', kind: 'local', label: 'Local' };
-export interface TodayUsage { totalCostUsd: number; byModel: Record<string, number>; byProject: Record<string, number> }
-export interface ProjectUsageView { totalCostUsd: number; sessions: Array<{ sessionId: string; name: string; lastModified: number; costUsd: number }> }
 
 const name = (max: number) => z.string().trim().min(1).max(max);
 export const createProjectBody = z.object({ name: name(80), path: z.string().min(1).max(1024), lean: z.boolean().default(false), connectionId: z.string().min(1).default('local') });
 export const createConnectionBody = z.object({ target: z.string().min(1).max(255), label: name(80).optional(), claudePath: z.string().max(255).optional() });
-export const patchProjectBody = z.object({ name: name(80).optional(), lean: z.boolean().optional(), routing: z.boolean().optional(), bypass: z.boolean().optional(), model: modelSchema.optional(), effort: effortSchema.optional() });
+export const patchProjectBody = z.object({ name: name(80).optional(), lean: z.boolean().optional(), routing: z.boolean().optional(), bypass: z.boolean().optional(), autoCompact: z.boolean().optional(), model: modelSchema.optional(), effort: effortSchema.optional() });
 export const patchConfigBody = z.object({ model: modelSchema.optional(), effort: effortSchema.optional() })
   .refine((b) => b.model !== undefined || b.effort !== undefined, { message: 'nada para alterar' });
 /** plan rate-limit window: utilization 0-100, resets_at ISO 8601 */
@@ -88,6 +91,11 @@ export const lastConnectionBody = z.object({ connectionId: z.string().min(1) });
 // ---- eventos (contrato único entre backend e React) ----
 export type SessionState = 'idle' | 'running' | 'awaiting_permission' | 'exited';
 export interface PendingPermission { reqId: string; toolName: string; input: unknown }
+// a task Claude left running in the background (Bash run_in_background, backgrounded subagent, monitor...); taskId = SDK task_id
+export interface BgTask {
+  taskId: string; toolUseId?: string; kind: string; description: string;
+  status: 'running' | 'completed' | 'failed' | 'stopped'; startedAt: number; endedAt?: number; summary?: string;
+}
 export type EventBody =
   | { type: 'session.state'; state: SessionState }
   | { type: 'user.message'; text: string }
@@ -98,19 +106,26 @@ export type EventBody =
   // subagente (Task tool): taskId = tool_use_id do Task tool. Só 1º nível vira aba no cliente.
   | { type: 'task.started'; taskId: string; subagentType?: string; description: string }
   | { type: 'task.updated'; taskId: string; status: 'pending' | 'running' | 'completed' | 'failed' | 'killed' | 'paused' }
+  // full list of the session's background tasks (REPLACE semantics); running ones become 'stopped' when the process exits
+  | { type: 'bg.tasks'; tasks: BgTask[] }
   | { type: 'routing.started' }
   | { type: 'model.routed'; model: Model }
   | ({ type: 'permission.requested' } & PendingPermission)
   | { type: 'permission.resolved'; reqId: string; allow: boolean }
   // modelUsage: no evento entregue ao cliente é o gasto SÓ deste turno, por modelo (delta calculado em hub.ts)
   | { type: 'turn.completed'; totals: UsageTotals; inputTokens: number; outputTokens: number; cacheCreationTokens: number; cacheReadTokens: number; modelUsage: Record<string, ModelUsage> }
+  // context window occupancy after a turn (SDK getContextUsage 'summary', no token cost); percentage is of the autocompact window
+  | { type: 'context.usage'; percentage: number; totalTokens: number; maxTokens: number }
+  // `/compact` (manual or the CLI's own auto-compact): no real progress is reported, only start and end
+  | { type: 'compact'; phase: 'started' | 'done' | 'failed'; preTokens?: number; postTokens?: number; message?: string }
   | { type: 'shell.started'; id: string; command: string }
   | ({ type: 'shell.result'; id: string } & ShellResult)
   // `/mcp` panel: servers absent = still loading (the client keeps the previous list while it refreshes)
   | { type: 'mcp.status'; id: string; servers?: McpServerView[]; error?: string }
-  | { type: 'error'; code: 'runtime' | 'exit'; message: string };
+  // errorId: key of the entry in the daily error log (Logs page), shown next to the error so it can be looked up
+  | { type: 'error'; code: 'runtime' | 'exit'; message: string; errorId?: string };
 export type ClaudeEvent = EventBody & { sessionId: string; seq: number; ts: number };
-export interface HistoryItem { role: 'user' | 'assistant'; text: string }
+export interface HistoryItem { role: 'user' | 'assistant'; text: string; ts?: number }
 // acumulado da sessão (todas as execuções, inclusive antes de um resume); custo é ESTIMATIVA a preço de API (não é cobrança em plano de assinatura)
 export interface UsageTotals { costUsd: number; input: number; output: number; cacheCreation: number; cacheRead: number }
 export interface ModelUsage { input: number; output: number; cacheCreation: number; cacheRead: number; costUsd: number }
@@ -125,12 +140,26 @@ export const mcpActionSchema = z.object({ kind: z.enum(['reconnect', 'enable', '
 export type McpAction = z.infer<typeof mcpActionSchema>;
 export const ZERO_TOTALS: UsageTotals = { costUsd: 0, input: 0, output: 0, cacheCreation: 0, cacheRead: 0 };
 
+// ---- error log: one JSON line per entry in <data dir>/logs/YYYY-MM-DD.jsonl (local date) ----
+export interface LogEntry {
+  id: string; ts: string; level: 'error' | 'warn';
+  /** session = event of a Claude session; ws/http = request handling; process = uncaught exception in the backend */
+  source: 'session' | 'ws' | 'http' | 'process';
+  code?: string; message: string; stack?: string;
+  sessionId?: string; projectId?: string; projectName?: string; sessionName?: string;
+  /** everything else useful to debug later (open options, session state, recent events, request, versions) */
+  context?: Record<string, unknown>;
+}
+export const LOG_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 // ---- protocolo WebSocket ----
 export const ClientMsg = z.discriminatedUnion('type', [
   z.object({ type: z.literal('auth'), token: z.string() }),
   z.object({ type: z.literal('attach'), sessionId: uuidSchema, projectId: z.string().min(1), afterSeq: z.number().int().nonnegative().optional() }),
   z.object({ type: z.literal('detach'), sessionId: uuidSchema }),
-  z.object({ type: z.literal('send'), sessionId: uuidSchema, text: z.string().min(1).max(200_000), attachments: z.array(z.string()).max(10).optional() }),
+  z.object({ type: z.literal('send'), sessionId: uuidSchema, text: z.string().min(1).max(200_000), attachments: z.array(z.string()).max(10).optional(), origin: z.literal('auto-compact').optional() }),
+  // the user dismissed the auto-compact prompt (only the web knows); recorded in the session log
+  z.object({ type: z.literal('compact.declined'), sessionId: uuidSchema, percentage: z.number().min(0).max(100) }),
   z.object({ type: z.literal('interrupt'), sessionId: uuidSchema }),
   z.object({ type: z.literal('shell'), sessionId: uuidSchema, command: z.string().trim().min(1).max(10_000) }),
   // id = existing /mcp card to refresh in place; absent = new card
@@ -141,7 +170,8 @@ export type ClientMsgT = z.infer<typeof ClientMsg>;
 
 export type ServerMsg =
   | { type: 'ready' }
-  | { type: 'snapshot'; sessionId: string; history: HistoryItem[]; state: SessionState; lastSeq: number; totals: UsageTotals; pending: PendingPermission[] }
+  | { type: 'snapshot'; sessionId: string; history: HistoryItem[]; state: SessionState; lastSeq: number; totals: UsageTotals; pending: PendingPermission[]; bgTasks: BgTask[] }
   | { type: 'event'; event: ClaudeEvent }
-  | { type: 'error'; code: string; message: string }
+  | { type: 'error'; code: string; message: string; errorId?: string }
+  | { type: 'log'; entry: LogEntry }
   | { type: 'connection.status'; id: string; status: ConnStatus; message?: string };

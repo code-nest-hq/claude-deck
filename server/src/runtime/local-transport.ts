@@ -2,16 +2,20 @@ import { execFile, spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { getSessionInfo, getSessionMessages, listSessions } from '@anthropic-ai/claude-agent-sdk';
+import { getSessionMessages, listSessions } from '@anthropic-ai/claude-agent-sdk';
 import type { HistoryItem } from '@ccui/shared';
 import { spawnManaged } from './child';
 import { activeConfigDir } from '../profiles';
 import { encodeCwd, SESSION_ID_RE } from '../ssh-util';
 import { blockText, cleanTags } from './events';
-import { costCheckpoints, lastCostState } from './jsonl';
+import { jsonlTimestamps, lastCostState } from './jsonl';
+import type { Transcript } from './types';
 import type { Transport } from './types';
 
 export { reportOrphans } from './child';
+
+const sessionFile = (sessionId: string, cwd: string) =>
+  path.join(process.env.CLAUDE_CONFIG_DIR ?? path.join(homedir(), '.claude'), 'projects', encodeCwd(cwd), `${sessionId}.jsonl`);
 
 export const SHELL_TIMEOUT_MS = 120_000;
 export const SHELL_MAX_OUTPUT = 200 * 1024;
@@ -43,6 +47,19 @@ export const localTransport: Transport = {
     } catch { return null; }
   },
 
+  async tailFile(p, bytes) {
+    try {
+      const f = await fs.open(p, 'r');
+      try {
+        const { size } = await f.stat();
+        const len = Math.min(size, bytes);
+        const buf = Buffer.alloc(len);
+        await f.read(buf, 0, len, size - len);
+        return buf.toString('utf8');
+      } finally { await f.close(); }
+    } catch { return null; }
+  },
+
   async listSessions(cwd) {
     const list = await listSessions({ dir: cwd });
     return list.map((s) => ({ sessionId: s.sessionId, summary: s.summary, customTitle: s.customTitle, firstPrompt: s.firstPrompt, lastModified: s.lastModified }));
@@ -51,15 +68,20 @@ export const localTransport: Transport = {
   async history(sessionId, cwd) {
     let msgs: Awaited<ReturnType<typeof getSessionMessages>> = [];
     try { msgs = await getSessionMessages(sessionId, { dir: cwd }); } catch { /* sessão ainda sem jsonl */ }
+    const stamps = await fs.readFile(sessionFile(sessionId, cwd), 'utf8').then(jsonlTimestamps, () => new Map<string, number>());
     return msgs.flatMap((m): HistoryItem[] => {
       if (m.type === 'system') return [];
       const text = cleanTags(blockText((m.message as { content?: unknown } | null)?.content));
-      return text ? [{ role: m.type, text }] : [];
+      const ts = stamps.get(m.uuid);
+      return text ? [{ role: m.type, text, ...(ts ? { ts } : {}) }] : [];
     });
   },
 
+  // the jsonl itself, like the SSH transport: getSessionInfo() returns undefined for real sessions it doesn't list
+  // (e.g. one that started with a slash command), and a new process would then fail with "Session ID … is already in use"
   async sessionExists(sessionId, cwd) {
-    return !!(await getSessionInfo(sessionId, { dir: cwd }));
+    if (!SESSION_ID_RE.test(sessionId)) return false;
+    try { return (await fs.stat(sessionFile(sessionId, cwd))).isFile(); } catch { return false; }
   },
 
   // Comando digitado pelo usuário (modo `!`): shell de login do usuário, args em array (sem interpolar o texto), grupo próprio para matar tudo no timeout.
@@ -80,24 +102,33 @@ export const localTransport: Transport = {
     });
   },
 
-  // lê o fim do jsonl (o `cost-state` é regravado periodicamente); aumenta o trecho até achar
-  async costCheckpoints(sessionId, cwd) {
+  // a session started under a profile lives in that profile's config dir: try the active profile's, then the default
+  async readTranscript(sessionId, cwd) {
     if (!SESSION_ID_RE.test(sessionId)) return null;
-    const file = path.join(process.env.CLAUDE_CONFIG_DIR ?? path.join(homedir(), '.claude'), 'projects', encodeCwd(cwd), `${sessionId}.jsonl`);
-    let fh;
-    try {
-      fh = await fs.open(file, 'r');
-      const { size } = await fh.stat();
-      const len = Math.min(8 * 1024 * 1024, size);
-      const buf = Buffer.alloc(len);
-      await fh.read(buf, 0, len, size - len);
-      return costCheckpoints(buf.toString('utf8'));
-    } catch { return null; } finally { await fh?.close(); }
+    const roots = [activeConfigDir(), process.env.CLAUDE_CONFIG_DIR, path.join(homedir(), '.claude')].filter((d): d is string => !!d);
+    for (const root of roots) {
+      const projectDir = path.join(root, 'projects', encodeCwd(cwd));
+      let main: string;
+      try { main = await fs.readFile(path.join(projectDir, `${sessionId}.jsonl`), 'utf8'); } catch { continue; }
+      const subDir = path.join(projectDir, sessionId, 'subagents');
+      const files = await fs.readdir(subDir).catch(() => [] as string[]);
+      const out: Transcript = { main, subagents: [] };
+      for (const f of files.filter((n) => n.endsWith('.jsonl'))) {
+        const id = f.slice(0, -'.jsonl'.length);
+        out.subagents.push({
+          id,
+          jsonl: await fs.readFile(path.join(subDir, f), 'utf8').catch(() => ''),
+          meta: await fs.readFile(path.join(subDir, `${id}.meta.json`), 'utf8').catch(() => null),
+        });
+      }
+      return out;
+    }
+    return null;
   },
 
   async usage(sessionId, cwd) {
     if (!SESSION_ID_RE.test(sessionId)) return null;
-    const file = path.join(process.env.CLAUDE_CONFIG_DIR ?? path.join(homedir(), '.claude'), 'projects', encodeCwd(cwd), `${sessionId}.jsonl`);
+    const file = sessionFile(sessionId, cwd);
     let fh;
     try {
       fh = await fs.open(file, 'r');

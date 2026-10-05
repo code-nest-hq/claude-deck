@@ -1,7 +1,7 @@
 import { claudeExpr, DEFAULT_CLAUDE_PATH, encodeCwd, explainSshError, runSsh, SESSION_ID_RE, shq, sshArgv } from '../ssh-util';
 import { spawnManaged } from './child';
 import { SHELL_MAX_OUTPUT, SHELL_TIMEOUT_MS } from './local-transport';
-import { costCheckpoints, firstPrompt, lastCostState, parseHistory } from './jsonl';
+import { FILE_MARK, firstPrompt, lastCostState, parseHistory, parseRemoteTranscript } from './jsonl';
 import type { Transport } from './types';
 
 const LIST_LIMIT = 50;
@@ -44,6 +44,11 @@ export function sshTransport(conn: { target: string; claudePath?: string }): Tra
       if (sizeR.code !== 0 || !Number.isFinite(size) || size > maxBytes) return null;
       const r = await sh(`base64 -w0 ${shq(p)}`, 30_000);
       return r.code === 0 ? r.stdout.trim() : null;
+    },
+
+    async tailFile(p, bytes) {
+      const r = await sh(`tail -c ${Math.floor(bytes)} ${shq(p)}`);
+      return r.code === 0 ? r.stdout : null;
     },
 
     async listSessions(cwd) {
@@ -89,16 +94,17 @@ export function sshTransport(conn: { target: string; claudePath?: string }): Tra
       };
     },
 
-    async costCheckpoints(id, cwd) {
-      if (!SESSION_ID_RE.test(id)) return null;
-      const r = await sh(`tail -c 8388608 ${dir(cwd)}/${id}.jsonl 2>/dev/null`, 30_000);
-      return r.code === 0 ? costCheckpoints(r.stdout) : null;
-    },
-
     async usage(id, cwd) {
       if (!SESSION_ID_RE.test(id)) return null;
       const r = await sh(`tail -c 4194304 ${dir(cwd)}/${id}.jsonl 2>/dev/null | grep -a '"type":"cost-state"' | tail -n 1`, 30_000);
       return r.code === 0 ? lastCostState(r.stdout) : null;
+    },
+
+    async readTranscript(id, cwd) {
+      if (!SESSION_ID_RE.test(id)) return null;
+      // main file, then every file under <id>/subagents/ each preceded by a marker line (one round trip)
+      const r = await sh(`cd ${dir(cwd)} 2>/dev/null && [ -f ${id}.jsonl ] && { cat ${id}.jsonl; for f in ${id}/subagents/*; do [ -f "$f" ] && printf '\\n${FILE_MARK}%s\\n' "$f" && cat "$f"; done; true; }`, 120_000);
+      return r.code === 0 && r.stdout ? parseRemoteTranscript(r.stdout) : null;
     },
 
     async git(cwd) {

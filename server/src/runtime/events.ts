@@ -94,6 +94,13 @@ export function mapMessage(m: SDKMessage): EventBody[] {
       if (m.subtype === 'task_started' && !m.skip_transcript && !m.ambient && m.tool_use_id) {
         return [{ type: 'task.started', taskId: m.tool_use_id, subagentType: m.subagent_type, description: m.description }];
       }
+      if (m.subtype === 'status') {
+        if (m.status === 'compacting') return [{ type: 'compact', phase: 'started' }];
+        if (m.compact_result === 'failed') return [{ type: 'compact', phase: 'failed', message: m.compact_error }];
+      }
+      if (m.subtype === 'compact_boundary') {
+        return [{ type: 'compact', phase: 'done', preTokens: m.compact_metadata.pre_tokens, postTokens: m.compact_metadata.post_tokens }];
+      }
       return [];
     default:
       return []; // hooks, status, rate_limit, etc.

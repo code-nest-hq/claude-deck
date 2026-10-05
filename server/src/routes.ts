@@ -4,14 +4,16 @@ import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import {
   createConnectionBody, createProfileBody, createProjectBody, createSessionBody, lastConnectionBody, loginCodeBody, patchConfigBody, patchProjectBody, patchSessionBody, uuidSchema,
-  type Connection, type Project, type SessionMeta, type SlashCommandInfo,
+  type Connection, type Project, type SessionMeta, type SessionStatus, type SlashCommandInfo,
 } from '@ccui/shared';
 import { versionWarning, type Connections } from './connections';
-import { ensureMeta, listProjectSessions } from './domain';
+import { ensureMeta, listProjectSessions, openSpecFor } from './domain';
+import { buildExport } from './export';
 import { parseGitStatus } from './git';
+import { logDay, logDays, readLogs } from './logs';
 import { activate, DEFAULT_PROFILE, knownProfile, listProfiles, logout, removeProfile, sendCode, startLogin, usageFor } from './profiles';
 import type { SessionHub } from './hub';
-import { todayDelta } from './runtime/jsonl';
+import { readSessionLog } from './session-log';
 import { checkConnection, validClaudePath, validTarget } from './ssh-util';
 import type { Store } from './store';
 
@@ -29,29 +31,13 @@ export function buildApi({ store, hub, conns }: Deps) {
   const project = (id: string) => projects().find((p) => p.id === id);
   const bad = (c: Context, msg: string) => c.json({ error: msg }, 400);
 
-  api.get('/state', (c) => c.json({ config: store.config.data, projects: projects(), status: conns.all() }));
-
-  // agregação de gastos de hoje, todas as conexões/projetos/sessões (janela de leitura limitada, ver Transport.costCheckpoints)
-  api.get('/usage/today', async (c) => {
-    const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
-    let totalCostUsd = 0;
-    const byModel: Record<string, number> = {};
-    const byProject: Record<string, number> = {};
-    for (const p of projects()) {
-      const rt = conns.get(p.connectionId);
-      const sessions = await rt.runtime.listSessions(p.path).catch(() => []);
-      for (const s of sessions) {
-        const checkpoints = await rt.transport.costCheckpoints(s.sessionId, p.path).catch(() => null);
-        if (!checkpoints) continue;
-        const delta = todayDelta(checkpoints, todayStart.getTime());
-        if (delta.totals.costUsd <= 0) continue;
-        totalCostUsd += delta.totals.costUsd;
-        byProject[p.id] = (byProject[p.id] ?? 0) + delta.totals.costUsd;
-        for (const [model, u] of Object.entries(delta.modelUsage)) byModel[model] = (byModel[model] ?? 0) + u.costUsd;
-      }
-    }
-    return c.json({ totalCostUsd, byModel, byProject });
+  // daily error log (Logs page): ?day=YYYY-MM-DD, default today; `days` lists the days that have a file
+  api.get('/logs', async (c) => {
+    const day = c.req.query('day') ?? logDay();
+    return c.json({ day, days: await logDays(), entries: await readLogs(day) });
   });
+
+  api.get('/state', (c) => c.json({ config: store.config.data, projects: projects(), status: conns.all() }));
 
   // padrões globais (modelo/effort/limite de gasto por sessão), configuráveis em runtime pela UI de configurações
   api.patch('/config', async (c) => {
@@ -170,25 +156,6 @@ export function buildApi({ store, hub, conns }: Deps) {
     return c.json(await listProjectSessions(store, conns.get(p.connectionId).runtime, hub, p));
   });
 
-  // custo acumulado do projeto (todas as sessões) + últimas 5 com custo individual (reusa Transport.usage(), já existente)
-  api.get('/projects/:id/usage', async (c) => {
-    const p = project(c.req.param('id'));
-    if (!p) return c.json({ error: 'projeto desconhecido' }, 404);
-    const rt = conns.get(p.connectionId);
-    const disk = await rt.runtime.listSessions(p.path).catch(() => []);
-    const metas = new Map(store.sessions.data.sessions.filter((s) => s.projectId === p.id).map((m) => [m.sessionId, m]));
-    let totalCostUsd = 0;
-    const rows = await Promise.all(disk.map(async (d) => {
-      const u = await rt.transport.usage(d.sessionId, p.path).catch(() => null);
-      const costUsd = u?.totals.costUsd ?? 0;
-      totalCostUsd += costUsd;
-      const meta = metas.get(d.sessionId);
-      return { sessionId: d.sessionId, name: meta?.name ?? d.customTitle ?? d.summary ?? '(sem título)', lastModified: d.lastModified, costUsd };
-    }));
-    rows.sort((a, b) => b.lastModified - a.lastModified);
-    return c.json({ totalCostUsd, sessions: rows.slice(0, 5) });
-  });
-
   // comandos `/` do projeto para o autocomplete; cache de 5 min por (projeto, lean); falha => lista vazia (a UI tenta de novo depois)
   const cmdCache = new Map<string, { at: number; list: SlashCommandInfo[] }>();
   const cmdInflight = new Map<string, Promise<SlashCommandInfo[]>>();
@@ -221,6 +188,52 @@ export function buildApi({ store, hub, conns }: Deps) {
       if (r === 'busy') return c.json({ error: 'wait for the current turn to finish' }, 409);
       return c.json({ live: !!r, ...(r ?? {}) });
     } catch (e) { return bad(c, (e as Error).message); }
+  });
+
+  // Status modal: effective settings resolved exactly like the process opens (openSpecFor)
+  api.get('/projects/:id/sessions/:sid/status', (c) => {
+    const sid = uuidSchema.safeParse(c.req.param('sid'));
+    const meta = sid.success ? store.sessions.data.sessions.find((s) => s.sessionId === sid.data && s.projectId === c.req.param('id')) : undefined;
+    if (!meta) return c.json({ error: 'projeto/sessão desconhecido' }, 404);
+    const { cwd: _cwd, ...spec } = openSpecFor(store, meta.sessionId);
+    return c.json({ meta, live: hub.isLive(meta.sessionId), ...spec } satisfies SessionStatus);
+  });
+
+  // full-overview export (NDJSON for another AI): the Deck's session log merged with the Claude Code transcript; ?redact=0 keeps secrets
+  api.get('/projects/:id/sessions/:sid/export', async (c) => {
+    const sid = uuidSchema.safeParse(c.req.param('sid'));
+    const p = project(c.req.param('id'));
+    const meta = sid.success ? store.sessions.data.sessions.find((s) => s.sessionId === sid.data && s.projectId === c.req.param('id')) : undefined;
+    if (!p || !meta) return c.json({ error: 'projeto/sessão desconhecido' }, 404);
+    const { cwd, ...spec } = openSpecFor(store, meta.sessionId);
+    const [deckLog, transcript] = await Promise.all([readSessionLog(meta.sessionId), conns.get(p.connectionId).transport.readTranscript(meta.sessionId, cwd).catch(() => null)]);
+    const text = buildExport({
+      session: { sessionId: meta.sessionId, name: meta.name ?? '', settings: { project: p.name, connection: p.connectionId, autoCompact: !!p.autoCompact, ...spec } },
+      deckLog, transcript, redact: c.req.query('redact') !== '0',
+    });
+    const slug = (meta.name ?? 'session').normalize('NFD').replace(/[^\w-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'session';
+    return c.body(text, 200, {
+      'Content-Type': 'application/x-ndjson; charset=utf-8',
+      'Content-Disposition': `attachment; filename="${slug}-${meta.sessionId.slice(0, 8)}-${logDay()}.jsonl"`,
+    });
+  });
+
+  // background tasks modal: output tail and stop (the list itself comes over the WebSocket: bg.tasks / snapshot)
+  const bgTarget = (c: Context) => {
+    const sid = uuidSchema.safeParse(c.req.param('sid'));
+    const taskId = c.req.param('taskId') ?? '';
+    const ok = sid.success && /^[\w-]{1,64}$/.test(taskId) && store.sessions.data.sessions.some((s) => s.sessionId === sid.data && s.projectId === c.req.param('id'));
+    return ok ? { sid: sid.data!, taskId } : null;
+  };
+  api.get('/projects/:id/sessions/:sid/bg/:taskId/output', async (c) => {
+    const t = bgTarget(c);
+    if (!t) return c.json({ error: 'projeto/sessão/task desconhecido' }, 404);
+    try { return c.json(await hub.bgOutput(t.sid, t.taskId)); } catch (e) { return bad(c, (e as Error).message); }
+  });
+  api.post('/projects/:id/sessions/:sid/bg/:taskId/stop', async (c) => {
+    const t = bgTarget(c);
+    if (!t) return c.json({ error: 'projeto/sessão/task desconhecido' }, 404);
+    try { return c.json({ stopped: await hub.stopTask(t.sid, t.taskId) }); } catch (e) { return bad(c, (e as Error).message); }
   });
 
   // branch/status do Git do projeto (null quando não é um repositório ou o servidor não responde)
