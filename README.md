@@ -25,7 +25,7 @@ The terminal is great for coding, not so great for tracking several Claude Code 
 - **Model Routing**: per message, picks Haiku (fast/cheap) or Sonnet (more capable). It uses a text heuristic, with a throwaway Haiku classifier as a fallback, and can escalate to Sonnet mid-turn when a task turns out harder than expected. It is opt-in per project (or per session). When off, the fixed configured model runs with zero overhead.
 
 **Visibility and control**
-- **Spend dashboard**: today's spend, broken down by model and by project, with a per-project drill-down into recent sessions.
+- **Session export**: the **Export** button on a session downloads one `.jsonl` for external analysis (for example, token optimization by another AI). It has a manifest (usage totals deduplicated by message id, cost per origin, skill/MCP/plugin attribution, compactions) and a single timeline merging Claude Code's transcript, subagent transcripts and Code Nest's own events (routing verdicts and classifier cost, compactions and who requested them, process lifecycle). Secrets are masked by default (toggle in the modal). Works for local and SSH projects.
 - **Profiles (multiple Claude accounts)**: the Profile page shows everything the CLI knows about each logged-in account (`claude auth status`, account/org/plan details, credential expiry; never tokens). Add profiles, log in/out, and switch the account used by new local sessions with one click; each profile is its own `CLAUDE_CONFIG_DIR` under `~/.code-nest/profiles/` that shares skills, plugins, settings and session history with `~/.claude` via symlinks. SSH projects keep the remote host's login.
 - **Plan usage**: the **Uso** button on each profile opens the same data as the terminal's `/usage`: 5-hour session and weekly limits with usage %, reset countdown and time, elapsed share of the window and a pace projection; weekly per-model windows; where the weekly limit went (Claude Code, chats, ...); extra credits; and what is driving usage on this machine over 24h/7 days (behaviors like long context or cache misses, top skills, agents, plugins and MCP servers). Read through the SDK's control channel, no tokens spent.
 - **Read-only terminal**: shows `!cmd` runs and subagent logs (Task tool). It never accepts direct input, so permission approval is never bypassed.
@@ -49,7 +49,7 @@ No state-machine framework, no ORM, no Controller/Service layers — each file h
 ## Structure
 
 ```
-web/     -> React SPA (chat, tabs, sidebar, settings, spend dashboard, read-only terminal)
+web/     -> React SPA (chat, tabs, sidebar, settings, session export modal, read-only terminal)
 server/  -> Hono API + WebSocket + Agent SDK runtime (local and SSH)
 shared/  -> types and WebSocket event protocol used by both sides
 docs/    -> architecture/frontend/backend/testing documentation
@@ -118,5 +118,6 @@ No automated test suite by project choice (see [`docs/testing.md`](docs/testing.
 | v1.3.0 | Skills-invoked badge and modal on the turn summary, Refresh button (reload skills/plugins into the session), Code Nest data dir (`~/.code-nest`) with automatic migration, updated docs |
 | v1.4.0 | Profile page and multiple Claude account profiles (add, log in/out, switch for new local sessions) |
 | v1.5.0 | Plan usage modal per profile: 5-hour and weekly limits with resets and pace, per-model windows, extra credits, local usage drivers |
+| v1.6.0 | Per-session telemetry export (manifest + merged timeline, secret redaction, local/SSH), Deck-side session event log, classifier source/cost in routing; spend dashboard removed |
 
 The design and decision history for each feature is in `docs/superpowers/{specs,plans}/`.
