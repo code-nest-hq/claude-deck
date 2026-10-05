@@ -8,7 +8,8 @@ import { spawnManaged } from './child';
 import { activeConfigDir } from '../profiles';
 import { encodeCwd, SESSION_ID_RE } from '../ssh-util';
 import { blockText, cleanTags } from './events';
-import { costCheckpoints, jsonlTimestamps, lastCostState } from './jsonl';
+import { jsonlTimestamps, lastCostState } from './jsonl';
+import type { Transcript } from './types';
 import type { Transport } from './types';
 
 export { reportOrphans } from './child';
@@ -101,19 +102,28 @@ export const localTransport: Transport = {
     });
   },
 
-  // lê o fim do jsonl (o `cost-state` é regravado periodicamente); aumenta o trecho até achar
-  async costCheckpoints(sessionId, cwd) {
+  // a session started under a profile lives in that profile's config dir: try the active profile's, then the default
+  async readTranscript(sessionId, cwd) {
     if (!SESSION_ID_RE.test(sessionId)) return null;
-    const file = sessionFile(sessionId, cwd);
-    let fh;
-    try {
-      fh = await fs.open(file, 'r');
-      const { size } = await fh.stat();
-      const len = Math.min(8 * 1024 * 1024, size);
-      const buf = Buffer.alloc(len);
-      await fh.read(buf, 0, len, size - len);
-      return costCheckpoints(buf.toString('utf8'));
-    } catch { return null; } finally { await fh?.close(); }
+    const roots = [activeConfigDir(), process.env.CLAUDE_CONFIG_DIR, path.join(homedir(), '.claude')].filter((d): d is string => !!d);
+    for (const root of roots) {
+      const projectDir = path.join(root, 'projects', encodeCwd(cwd));
+      let main: string;
+      try { main = await fs.readFile(path.join(projectDir, `${sessionId}.jsonl`), 'utf8'); } catch { continue; }
+      const subDir = path.join(projectDir, sessionId, 'subagents');
+      const files = await fs.readdir(subDir).catch(() => [] as string[]);
+      const out: Transcript = { main, subagents: [] };
+      for (const f of files.filter((n) => n.endsWith('.jsonl'))) {
+        const id = f.slice(0, -'.jsonl'.length);
+        out.subagents.push({
+          id,
+          jsonl: await fs.readFile(path.join(subDir, f), 'utf8').catch(() => ''),
+          meta: await fs.readFile(path.join(subDir, `${id}.meta.json`), 'utf8').catch(() => null),
+        });
+      }
+      return out;
+    }
+    return null;
   },
 
   async usage(sessionId, cwd) {

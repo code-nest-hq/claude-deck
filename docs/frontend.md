@@ -18,7 +18,6 @@ features/chat/        Chat, reduce.ts (event reducer), Markdown, GitBar, Command
 features/sessions/    Tabs, Palette (Ctrl+K), Shortcuts (? modal), NewSessionModal
 features/projects/    Sidebar, ProjectSettingsModal (lean/routing/auto-compact/bypass),
                        FolderBrowserModal (pick a folder, or files to attach)
-features/spend/       SpendDashboard (today by model/project), ProjectSpendView (drill-down)
 features/connect/     ConnectScreen, ServerForm (initial connection setup)
 lib/                  commands.ts (slash-command search), format.ts (fmtTokens etc.),
                        search.ts (normalization/matchRow)
@@ -63,10 +62,10 @@ Main actions: `open()`, `closeTab()`, `send()` (includes the session's staged at
 | `/mcp` panel | `features/chat/McpCard.tsx` | servers grouped by scope, status icons like the terminal; click for details, tools, Reconnect/Enable/Disable; needs-auth claude.ai connectors link to claude.ai settings |
 | Logs | `features/logs/LogsPage.tsx` | Daily error log, live (`logs` in the store); filter by day, project, level, free text / error ID. The error ID under a chat error opens it here |
 | Session status | `features/chat/StatusModal.tsx` | "Status" button in the chat header: read-only session ID (copy), path, connection, profile, effective model/effort/routing/permissions (`GET /api/projects/:id/sessions/:sid/status`, resolved by `openSpecFor`), context occupancy, tokens and cost |
+| Session export | `features/chat/ExportModal.tsx` | "Exportar" header button: "mask secrets" checkbox (on by default) + download of the session's full-overview `.jsonl` for analysis by another AI (`api.exportSession` fetches with the bearer token and saves the blob; a plain link would lack the auth header). |
 | Background tasks | `features/chat/BgTasksModal.tsx` | "Background" header button (only when the session has any; amber with the running count). Step 1: list (status, description, type, elapsed) from `Chat.bgTasks` (`bg.tasks` event / snapshot). Step 2: one task's status, Bash command (looked up by `toolUseId`), summary and output tail polled every 2 s while running (`GET .../bg/:taskId/output`), Stop button (`POST .../bg/:taskId/stop`) |
 | Project settings | `features/projects/ProjectSettingsModal.tsx` | Lean, Model Routing, Auto-compact (`chat/AutoCompactModal.tsx`), permission bypass (confirmation required, red badge when active) |
 | Folder browser | `features/projects/FolderBrowserModal.tsx` | `GET /api/connections/:id/browse`; folder mode for new projects, file mode for attachments |
-| Spend dashboard | `features/spend/SpendDashboard.tsx` | today's total/by model/by project; drill-down lists recent sessions and can open a Haiku+routing "validate spend" session |
 | AskUserQuestion modal | `features/chat/AskUserQuestionModal.tsx` | single/multi-select + free text, answer sent via `updatedInput` |
 | Command palette | `features/sessions/Palette.tsx` | Ctrl/Cmd+K, searches sessions + global actions (new session, theme, sidebar, terminal) |
 

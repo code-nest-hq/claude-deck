@@ -12,7 +12,7 @@ const handled = new Map<string, number>();
 
 // Auto-compact (project toggle): after each turn above the threshold asks to run `/compact`; while it runs, shows an
 // ESTIMATED progress (the SDK only reports start and end of a compaction). Also shows the CLI's own auto-compact.
-export function AutoCompactModal({ sessionId, chat, enabled, onCompact }: { sessionId: string; chat: Chat; enabled: boolean; onCompact: () => void }) {
+export function AutoCompactModal({ sessionId, chat, enabled, onCompact, onDecline }: { sessionId: string; chat: Chat; enabled: boolean; onCompact: () => void; onDecline: (percentage: number) => void }) {
   const [run, setRun] = useState<{ seq: number; at: number } | null>(null);
   const [hidden, setHidden] = useState(false);
   const [now, setNow] = useState(Date.now());
@@ -44,7 +44,7 @@ export function AutoCompactModal({ sessionId, chat, enabled, onCompact }: { sess
 
   const answer = (yes: boolean) => {
     handled.set(sessionId, ctx!.seq);
-    if (yes) { setRun({ seq: chat.lastSeq, at: Date.now() }); onCompact(); } else rerender((n) => n + 1);
+    if (yes) { setRun({ seq: chat.lastSeq, at: Date.now() }); onCompact(); } else { onDecline(ctx!.percentage); rerender((n) => n + 1); }
   };
 
   // asymptotic estimate, time constant scaled by context size (~30 s for 120k tokens)

@@ -1,4 +1,4 @@
-import { ZERO_TOTALS, type HistoryItem, type ModelUsage, type UsageTotals } from '@ccui/shared';
+import { type HistoryItem, type ModelUsage, type UsageTotals } from '@ccui/shared';
 import { blockText, cleanTags, rawModelUsage, sumUsage } from './events';
 
 interface Entry { type?: string; uuid?: string; timestamp?: string; isSidechain?: boolean; isMeta?: boolean; message?: { content?: unknown } }
@@ -49,51 +49,22 @@ export function lastCostState(jsonlTail: string): { totals: UsageTotals; modelUs
   return null;
 }
 
-export interface CostCheckpoint { ts: number; totals: UsageTotals; modelUsage: Record<string, ModelUsage> }
+/** marker line `readTranscript` prints (over SSH) before each subagent file */
+export const FILE_MARK = '@@CCUI-FILE@@ ';
 
-// cada cost-state associado ao timestamp da última mensagem (user/assistant) vista antes dele no arquivo
-export function costCheckpoints(jsonlTail: string): CostCheckpoint[] {
-  const out: CostCheckpoint[] = [];
-  let lastTs: number | null = null;
-  for (const line of jsonlTail.split('\n')) {
-    if (!line) continue;
-    let e: { type?: string; timestamp?: string; totalCostUSD?: number; modelUsage?: Parameters<typeof sumUsage>[0] };
-    try { e = JSON.parse(line); } catch { continue; } // linha cortada pela leitura em janela
-    if ((e.type === 'user' || e.type === 'assistant') && e.timestamp) {
-      const t = Date.parse(e.timestamp);
-      if (Number.isFinite(t)) lastTs = t;
-    } else if (e.type === 'cost-state' && lastTs !== null) {
-      // sem timestamp real visto ainda (1ª linha da janela cortada bem no meio): não dá pra datar este checkpoint,
-      // então descarta em vez de assumir época 0 (que sempre pareceria "antes de hoje" e viraria baseline errado)
-      out.push({ ts: lastTs, totals: sumUsage(e.modelUsage, e.totalCostUSD ?? 0), modelUsage: rawModelUsage(e.modelUsage) });
-    }
+// one ssh stdout: the main jsonl, then for each subagent file `\n<FILE_MARK><path>\n<content>`
+export function parseRemoteTranscript(stdout: string): { main: string; subagents: Array<{ id: string; meta: string | null; jsonl: string }> } {
+  const [main, ...files] = stdout.split('\n' + FILE_MARK);
+  const byId = new Map<string, { id: string; meta: string | null; jsonl: string }>();
+  for (const f of files) {
+    const nl = f.indexOf('\n');
+    const name = (nl < 0 ? f : f.slice(0, nl)).trim().split('/').pop() ?? '';
+    const content = nl < 0 ? '' : f.slice(nl + 1);
+    const m = /^(agent-.+?)\.(meta\.json|jsonl)$/.exec(name);
+    if (!m) continue;
+    const row = byId.get(m[1]) ?? { id: m[1], meta: null, jsonl: '' };
+    if (m[2] === 'jsonl') row.jsonl = content; else row.meta = content;
+    byId.set(m[1], row);
   }
-  return out;
-}
-
-// delta entre o checkpoint mais recente e o último anterior a todayStartMs; clamp >=0 (mesmo padrão de hub.ts diffModelUsage)
-export function todayDelta(checkpoints: CostCheckpoint[], todayStartMs: number): { totals: UsageTotals; modelUsage: Record<string, ModelUsage> } {
-  if (checkpoints.length === 0) return { totals: ZERO_TOTALS, modelUsage: {} };
-  const latest = checkpoints[checkpoints.length - 1];
-  const baseline = [...checkpoints].reverse().find((c) => c.ts < todayStartMs);
-  if (!baseline) return { totals: latest.totals, modelUsage: latest.modelUsage }; // sessão inteira é de hoje: tudo conta
-  const totals: UsageTotals = {
-    costUsd: Math.max(0, latest.totals.costUsd - baseline.totals.costUsd),
-    input: Math.max(0, latest.totals.input - baseline.totals.input),
-    output: Math.max(0, latest.totals.output - baseline.totals.output),
-    cacheCreation: Math.max(0, latest.totals.cacheCreation - baseline.totals.cacheCreation),
-    cacheRead: Math.max(0, latest.totals.cacheRead - baseline.totals.cacheRead),
-  };
-  const modelUsage: Record<string, ModelUsage> = {};
-  for (const [model, cur] of Object.entries(latest.modelUsage)) {
-    const prev = baseline.modelUsage[model];
-    modelUsage[model] = {
-      input: Math.max(0, cur.input - (prev?.input ?? 0)),
-      output: Math.max(0, cur.output - (prev?.output ?? 0)),
-      cacheCreation: Math.max(0, cur.cacheCreation - (prev?.cacheCreation ?? 0)),
-      cacheRead: Math.max(0, cur.cacheRead - (prev?.cacheRead ?? 0)),
-      costUsd: Math.max(0, cur.costUsd - (prev?.costUsd ?? 0)),
-    };
-  }
-  return { totals, modelUsage };
+  return { main, subagents: [...byId.values()] };
 }

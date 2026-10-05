@@ -247,13 +247,10 @@ export function Sidebar() {
         )}
       </div>
       <div className="m-3 flex gap-1.5">
-        <button className="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-900/60 py-1.5 text-xs font-medium text-zinc-200 transition-colors hover:bg-zinc-900" onClick={() => setUi({ spend: true, profile: false, logs: false })}>
-          Gastos
-        </button>
-        <button className="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-900/60 py-1.5 text-xs font-medium text-zinc-200 transition-colors hover:bg-zinc-900" onClick={() => setUi({ profile: true, spend: false, logs: false })}>
+        <button className="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-900/60 py-1.5 text-xs font-medium text-zinc-200 transition-colors hover:bg-zinc-900" onClick={() => setUi({ profile: true, logs: false })}>
           Perfil
         </button>
-        <button className="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-900/60 py-1.5 text-xs font-medium text-zinc-200 transition-colors hover:bg-zinc-900" onClick={() => setUi({ logs: true, spend: false, profile: false, logFilter: '' })}>
+        <button className="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-900/60 py-1.5 text-xs font-medium text-zinc-200 transition-colors hover:bg-zinc-900" onClick={() => setUi({ logs: true, profile: false, logFilter: '' })}>
           Logs
         </button>
         <button className="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-900/60 py-1.5 text-xs font-medium text-zinc-200 transition-colors hover:bg-zinc-900" onClick={() => setUi({ appSettings: true })}>

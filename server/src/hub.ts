@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { ZERO_TOTALS, type BgTask, type ClaudeEvent, type EventBody, type McpAction, type Model, type ModelUsage, type PendingPermission, type ServerMsg, type SessionState, type UsageTotals } from '@ccui/shared';
 import { logError } from './logs';
-import type { ClaudeRuntime, LiveSession, OpenOptions } from './runtime/types';
+import { recordSession } from './session-log';
+import type { Classification, ClaudeRuntime, LiveSession, OpenOptions } from './runtime/types';
 
 const BUFFER = 2000;
 const INTERRUPT_GRACE_MS = 5000;
@@ -25,6 +26,7 @@ interface Entry {
   // o delta calculado é o acumulado inteiro, não só o turno — aceitável, é só o resumo exibido no terminal
   prevModelUsage: Record<string, ModelUsage> | null;
   bgTasks: BgTask[]; // last bg.tasks list, sent in the snapshot
+  compactBy?: 'user' | 'deck-auto'; // who asked for the /compact in flight; none when its 'started' arrives = the CLI's own auto-compact
 }
 
 // the debug-relevant part of an event for the log's recent-events trail (no streamed text, no big tool payloads)
@@ -109,18 +111,25 @@ export class SessionHub {
   detach(c: Client, id: string) { this.entries.get(id)?.clients.delete(c); c.sessions.delete(id); }
   drop(c: Client) { for (const id of c.sessions) this.entries.get(id)?.clients.delete(c); c.sessions.clear(); }
 
-  async send(id: string, text: string, attachments: string[] = []): Promise<'ok' | 'busy'> {
+  async send(id: string, text: string, attachments: string[] = [], origin?: 'auto-compact'): Promise<'ok' | 'busy'> {
     const spec = this.spec(id);
     const e = this.entry(id);
     if (e.state === 'running' || e.state === 'awaiting_permission') return 'busy';
     this.setState(id, e, 'running'); // reserva antes do await para não abrir dois processos
+    const isCompact = /^\/compact(\s|$)/.test(text.trim());
+    if (isCompact) {
+      e.compactBy = origin === 'auto-compact' ? 'deck-auto' : 'user';
+      recordSession(id, 'compact.requested', { by: e.compactBy });
+    }
     // classify BEFORE taking the process: the process may exit during the (up to 15 s) classifier call,
     // so nothing may hold on to e.live across that await
     // `/compact` keeps the session's current model: no classifier call, and the summary isn't downgraded to Haiku
     let model: Model | undefined;
-    if (spec.routing && !/^\/compact(\s|$)/.test(text.trim())) {
+    if (spec.routing && !isCompact) {
       this.emit(id, e, { type: 'routing.started' });
-      model = await this.runtimeFor(id).classify(spec.cwd, text).catch(() => 'sonnet' as const);
+      const c: Classification = await this.runtimeFor(id).classify(spec.cwd, text).catch((): Classification => ({ model: 'sonnet', source: 'fallback', durationMs: 0 }));
+      model = c.model;
+      recordSession(id, 'routing.classified', { model: c.model, source: c.source, costUsd: c.costUsd, durationMs: c.durationMs });
     }
     if (!e.live) {
       try {
@@ -130,6 +139,7 @@ export class SessionHub {
         this.setState(id, e, 'idle');
         return 'ok';
       }
+      recordSession(id, 'process.open', { spec, resumed: e.live.resumed });
       void this.pump(id, e, e.live);
     }
     const live = e.live;
@@ -164,6 +174,7 @@ export class SessionHub {
     const e = this.entry(id);
     if (e.mcpRunning) return 'busy';
     e.mcpRunning = true;
+    if (action) recordSession(id, 'action', { action: 'mcp', mcpAction: action });
     const mid = cardId ?? randomUUID();
     this.emit(id, e, { type: 'mcp.status', id: mid });
     try {
@@ -182,6 +193,7 @@ export class SessionHub {
     const e = this.entries.get(id);
     if (!e?.live) return null;
     if (e.state === 'running' || e.state === 'awaiting_permission') return 'busy';
+    recordSession(id, 'action', { action: 'reload' });
     return e.live.reload();
   }
 
@@ -195,6 +207,7 @@ export class SessionHub {
     this.spec(id);
     const live = this.entries.get(id)?.live;
     if (!live) return false;
+    recordSession(id, 'action', { action: 'stopTask', taskId });
     await live.stopTask(taskId);
     return true;
   }
@@ -208,6 +221,7 @@ export class SessionHub {
     e.live = null;
     e.pending.clear();
     this.setState(id, e, 'exited');
+    recordSession(id, 'process.exit', { crash: !!crash });
     if (crash) void this.recover(id, e, crash);
   }
 
@@ -225,11 +239,18 @@ export class SessionHub {
     const e = this.entries.get(id);
     const live = e?.live;
     if (!e || !live) return;
+    recordSession(id, 'action', { action: 'interrupt', state: e.state });
     await live.interrupt().catch(() => {});
     // sem sair de running em 5 s => encerra o processo (a sessão continua retomável)
     setTimeout(() => {
       if (e.live === live && (e.state === 'running' || e.state === 'awaiting_permission')) void live.close();
     }, INTERRUPT_GRACE_MS);
+  }
+
+  /** the web asked "compact?" (auto-compact) and the user said no */
+  compactDeclined(id: string, percentage: number) {
+    this.spec(id);
+    recordSession(id, 'compact.declined', { percentage });
   }
 
   answerPermission(id: string, reqId: string, allow: boolean, updatedInput?: Record<string, unknown>) {
@@ -262,6 +283,12 @@ export class SessionHub {
     const ev = { ...body, sessionId: id, seq: ++e.seq, ts: Date.now() } as ClaudeEvent;
     e.buffer.push(ev);
     if (e.buffer.length > BUFFER) e.buffer.shift();
+    if (body.type !== 'message.delta') { // the transcript has the streamed text; everything else is the app's own view
+      const { type, ...fields } = body;
+      const by = body.type === 'compact' && body.phase === 'started' ? { by: e.compactBy ?? 'cli-auto' } : {};
+      recordSession(id, type, { seq: ev.seq, ...fields, ...by }, ev.ts);
+      if (body.type === 'compact' && body.phase === 'started') e.compactBy = undefined;
+    }
     for (const c of e.clients) c.send({ type: 'event', event: ev });
     switch (body.type) {
       case 'permission.requested':

@@ -6,7 +6,7 @@ import { disableNotify, enableNotify, notify, notifyEnabled } from './notify';
 import { createSocket } from './ws';
 
 export interface Tab { projectId: string; sessionId: string }
-export interface Ui { palette: boolean; help: boolean; newSession: boolean; newFor: string | null; term: boolean; settingsFor: string | null; appSettings: boolean; spend: boolean; profile: boolean; logs: boolean; logFilter: string }
+export interface Ui { palette: boolean; help: boolean; newSession: boolean; newFor: string | null; term: boolean; settingsFor: string | null; appSettings: boolean; profile: boolean; logs: boolean; logFilter: string }
 export const SIDEBAR_W_MIN = 224;
 export const SIDEBAR_W_MAX = 420;
 export const SIDEBAR_W_DEFAULT = 288;
@@ -62,7 +62,9 @@ interface App {
   removeAttachment(sessionId: string, path: string): void;
   toggleNotify(): Promise<void>;
   /** withFiles=false leaves the pending attachments for the next message (e.g. an automatic `/compact`) */
-  send(text: string, withFiles?: boolean): void;
+  send(text: string, withFiles?: boolean, origin?: 'auto-compact'): void;
+  /** the user dismissed the auto-compact prompt (recorded in the session log) */
+  compactDeclined(percentage: number): void;
   interrupt(): void;
   shell(command: string): void;
   mcp(id?: string, action?: McpAction): void;
@@ -106,7 +108,7 @@ export const useApp = create<App>((set, get) => {
 
   return {
     tokenMissing: false, up: false, config: null, projects: [], rows: {}, active: null, tabs: [], chats: {}, status: {},
-    attention: {}, notifyOn: notifyEnabled(), ui: { palette: false, help: false, newSession: false, newFor: null, term: false, settingsFor: null, appSettings: false, spend: false, profile: false, logs: false, logFilter: '' },
+    attention: {}, notifyOn: notifyEnabled(), ui: { palette: false, help: false, newSession: false, newFor: null, term: false, settingsFor: null, appSettings: false, profile: false, logs: false, logFilter: '' },
     logs: [],
     layout: loadLayout(), commands: {}, attachments: {},
 
@@ -234,12 +236,16 @@ export const useApp = create<App>((set, get) => {
       set({ notifyOn: await enableNotify() });
     },
 
-    send(text, withFiles = true) {
+    send(text, withFiles = true, origin) {
       const a = get().active;
       if (!a) return;
       const files = withFiles ? get().attachments[a.sessionId] ?? [] : [];
-      sock?.send({ type: 'send', sessionId: a.sessionId, text, attachments: files.length ? files : undefined });
+      sock?.send({ type: 'send', sessionId: a.sessionId, text, attachments: files.length ? files : undefined, origin });
       if (files.length) set((s) => ({ attachments: { ...s.attachments, [a.sessionId]: [] } }));
+    },
+    compactDeclined(percentage) {
+      const a = get().active;
+      if (a) sock?.send({ type: 'compact.declined', sessionId: a.sessionId, percentage });
     },
     addAttachment(sessionId, p) {
       set((s) => {

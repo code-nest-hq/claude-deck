@@ -7,7 +7,7 @@ import { visibleCommands } from '../commands';
 import { BgTasks } from './bg-tasks';
 import { mapMessage } from './events';
 import { classifyHeuristic, CLASSIFY_SYSTEM_PROMPT, learnedRoute, learnRoute } from './routing';
-import type { ClaudeRuntime, LiveSession, OpenOptions, SessionInfo, Transport } from './types';
+import type { Classification, ClaudeRuntime, LiveSession, OpenOptions, SessionInfo, Transport } from './types';
 
 const PERMISSION_TIMEOUT_MS = 10 * 60_000;
 const CLASSIFY_TIMEOUT_MS = 15_000;
@@ -27,15 +27,16 @@ async function attachmentBlocks(transport: Transport, paths: string[]): Promise<
   return blocks;
 }
 
-// lê a 1ª resposta de texto do assistente e fecha; usado pelo classificador descartável (sem persistir sessão)
-async function firstAssistantText(q: Query): Promise<string> {
+// lê a resposta de texto do assistente e o custo do `result` (maxTurns: 1, ele vem logo depois); usado pelo classificador descartável
+async function classifierAnswer(q: Query): Promise<{ text: string; costUsd?: number }> {
+  let text = '';
   for await (const m of q) {
-    if (m.type === 'assistant') {
+    if (m.type === 'assistant' && !text) {
       const b = m.message.content.find((c) => c.type === 'text');
-      if (b && 'text' in b) return b.text;
-    }
+      if (b && 'text' in b) text = b.text;
+    } else if (m.type === 'result') return { text, costUsd: m.total_cost_usd };
   }
-  return '';
+  return { text };
 }
 
 // fila assíncrona: produtor faz push, consumidor faz for-await
@@ -123,7 +124,7 @@ class Live implements LiveSession {
       this.out.push({ type: 'permission.requested', reqId, toolName, input });
     });
 
-  constructor(o: OpenOptions, resume: boolean, private transport: Transport) {
+  constructor(o: OpenOptions, readonly resumed: boolean, private transport: Transport) {
     const routingServer = o.routing ? createSdkMcpServer({
       name: 'routing',
       tools: [tool(
@@ -140,7 +141,7 @@ class Live implements LiveSession {
       prompt: this.input,
       options: {
         cwd: o.cwd,
-        ...(resume ? { resume: o.sessionId } : { sessionId: o.sessionId }),
+        ...(resumed ? { resume: o.sessionId } : { sessionId: o.sessionId }),
         model: o.model,
         effort: o.effort,
         permissionMode: o.permissionMode,
@@ -268,16 +269,19 @@ export class SdkRuntime implements ClaudeRuntime {
   shell(cwd: string, command: string): Promise<ShellResult> { return this.transport.shell(cwd, command); }
   usage(sessionId: string, cwd: string): Promise<{ totals: UsageTotals; modelUsage: Record<string, ModelUsage> } | null> { return this.transport.usage(sessionId, cwd); }
 
-  async classify(cwd: string, text: string): Promise<Model> {
-    const known = classifyHeuristic(text) ?? learnedRoute(text);
-    if (known) return known;
-    const model = await this.classifyViaHaiku(cwd, text);
-    if (!model) return 'sonnet'; // failure/timeout: bigger model, and nothing learned from it
-    learnRoute(text, model);
-    return model;
+  async classify(cwd: string, text: string): Promise<Classification> {
+    const t0 = Date.now();
+    const heuristic = classifyHeuristic(text);
+    const learnedModel = heuristic ? null : learnedRoute(text);
+    const known = heuristic ?? learnedModel;
+    if (known) return { model: known, source: heuristic ? 'heuristic' : 'learned', durationMs: Date.now() - t0 };
+    const r = await this.classifyViaHaiku(cwd, text);
+    if (!r.model) return { model: 'sonnet', source: 'fallback', costUsd: r.costUsd, durationMs: Date.now() - t0 }; // failure/timeout: bigger model, and nothing learned from it
+    learnRoute(text, r.model);
+    return { model: r.model, source: 'haiku', costUsd: r.costUsd, durationMs: Date.now() - t0 };
   }
 
-  private async classifyViaHaiku(cwd: string, text: string): Promise<Model | null> {
+  private async classifyViaHaiku(cwd: string, text: string): Promise<{ model: Model | null; costUsd?: number }> {
     const input = channel<SDKUserMessage>();
     const q = query({
       prompt: input,
@@ -293,11 +297,11 @@ export class SdkRuntime implements ClaudeRuntime {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const timeout = new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error('timeout ao classificar')), CLASSIFY_TIMEOUT_MS); });
-      const answer = await Promise.race([firstAssistantText(q), timeout]);
-      if (!answer.trim()) return null;
-      return /\bhaiku\b/i.test(answer) ? 'haiku' : 'sonnet';
+      const { text: answer, costUsd } = await Promise.race([classifierAnswer(q), timeout]);
+      if (!answer.trim()) return { model: null, costUsd };
+      return { model: /\bhaiku\b/i.test(answer) ? 'haiku' : 'sonnet', costUsd };
     } catch {
-      return null; // failure: the caller falls back to Sonnet, never to the cheap model
+      return { model: null }; // failure: the caller falls back to Sonnet, never to the cheap model
     } finally {
       clearTimeout(timer);
       q.close();

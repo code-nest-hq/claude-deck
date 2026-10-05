@@ -15,6 +15,7 @@ import { matchCommands, SlashMenu } from './SlashMenu';
 import { ShellCard } from './ShellCard';
 import { SkillsModal } from './SkillsModal';
 import { BgTasksModal } from './BgTasksModal';
+import { ExportModal } from './ExportModal';
 import { StatusModal } from './StatusModal';
 import { ToolCard } from './ToolCard';
 
@@ -31,7 +32,7 @@ function ErrorItem({ text, errorId }: { text: string; errorId?: string }) {
         <button
           className="mt-1.5 block font-mono text-[11px] text-rose-400/70 hover:text-rose-200"
           title="Copiar o ID e abrir nos Logs"
-          onClick={() => { void navigator.clipboard?.writeText(errorId).catch(() => {}); setUi({ logs: true, spend: false, profile: false, logFilter: errorId }); }}
+          onClick={() => { void navigator.clipboard?.writeText(errorId).catch(() => {}); setUi({ logs: true, profile: false, logFilter: errorId }); }}
         >ID do erro: {errorId}</button>
       )}
     </div>
@@ -130,7 +131,7 @@ function AttachedFilesPill({ sessionId, connectionId }: { sessionId: string; con
 }
 
 export function Chat() {
-  const { active, chats, rows, projects, config, status, up, ui, send, shell, mcp, interrupt, answer, setUi, ensureCommands, refreshSession } = useApp();
+  const { active, chats, rows, projects, config, status, up, ui, send, compactDeclined, shell, mcp, interrupt, answer, setUi, ensureCommands, refreshSession } = useApp();
   const [refresh, setRefresh] = useState<{ state: 'idle' | 'loading' | 'done' | 'error'; msg: string }>({ state: 'idle', msg: '' });
   const chat = active ? chats[active.sessionId] : undefined;
   const project = projects.find((p) => p.id === active?.projectId);
@@ -140,6 +141,7 @@ export function Chat() {
   const [sel, setSel] = useState(0);
   const [dismissed, setDismissed] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   const [bgOpen, setBgOpen] = useState(false);
   const [stampsOff, setStampsOff] = useState<Record<string, boolean>>({}); // per session; timestamps are on by default
   const end = useRef<HTMLDivElement>(null);
@@ -240,6 +242,7 @@ export function Chat() {
           })()}
           <button className={`rounded-md border px-2.5 py-1 text-xs transition-colors ${stampsOff[active.sessionId] ? 'border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-900' : 'border-zinc-700 bg-zinc-900 text-zinc-100'}`} title="Mostrar/ocultar data e hora das mensagens" onClick={() => setStampsOff((o) => ({ ...o, [active.sessionId]: !o[active.sessionId] }))}>Horário</button>
           {project && <button className="rounded-md border border-zinc-800 px-2.5 py-1 text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-900" title="ID, path, modelo e uso desta sessão" onClick={() => setStatusOpen(true)}>Status</button>}
+          <button className="rounded-md border border-zinc-800 px-2.5 py-1 text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-900" title="Exportar o panorama completo da sessão para análise por outra IA" onClick={() => setExportOpen(true)}>Exportar</button>
           <button className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs transition-colors ${ui.term ? 'border-zinc-700 bg-zinc-900 text-zinc-100' : 'border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-900'}`} title="Subagentes e comandos ! (Ctrl+J)" onClick={() => setUi({ term: !ui.term })}>Terminal</button>
         </div>
       </header>
@@ -293,8 +296,9 @@ export function Chat() {
         return q ? <AskUserQuestionModal p={q} onAnswer={(allow, updatedInput) => answer(q.reqId, allow, updatedInput)} /> : null;
       })()}
       {bgOpen && <BgTasksModal projectId={active.projectId} sessionId={active.sessionId} chat={chat} onClose={() => setBgOpen(false)} />}
+      {exportOpen && <ExportModal projectId={active.projectId} sessionId={active.sessionId} onClose={() => setExportOpen(false)} />}
       {statusOpen && project && <StatusModal sessionId={active.sessionId} name={name} project={project} config={config} chat={chat} onClose={() => setStatusOpen(false)} />}
-      <AutoCompactModal key={active.sessionId} sessionId={active.sessionId} chat={chat} enabled={!!project?.autoCompact} onCompact={() => send('/compact', false)} />
+      <AutoCompactModal key={active.sessionId} sessionId={active.sessionId} chat={chat} enabled={!!project?.autoCompact} onCompact={() => send('/compact', false, 'auto-compact')} onDecline={compactDeclined} />
 
       <div className="relative border-t border-zinc-800/70 bg-zinc-950 p-3">
         {menuOpen && <SlashMenu items={matches} sel={Math.min(sel, matches.length - 1)} lean={!!project?.lean} onPick={pick} onHover={setSel} />}

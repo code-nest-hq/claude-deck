@@ -43,8 +43,6 @@ export interface SlashCommandInfo { name: string; description: string; argumentH
 export interface GitInfo { branch: string | null; ahead: number; behind: number; changed: number; untracked: number }
 export interface DirEntry { name: string; isDir: boolean }
 export const LOCAL: Connection = { id: 'local', kind: 'local', label: 'Local' };
-export interface TodayUsage { totalCostUsd: number; byModel: Record<string, number>; byProject: Record<string, number> }
-export interface ProjectUsageView { totalCostUsd: number; sessions: Array<{ sessionId: string; name: string; lastModified: number; costUsd: number }> }
 
 const name = (max: number) => z.string().trim().min(1).max(max);
 export const createProjectBody = z.object({ name: name(80), path: z.string().min(1).max(1024), lean: z.boolean().default(false), connectionId: z.string().min(1).default('local') });
@@ -159,7 +157,9 @@ export const ClientMsg = z.discriminatedUnion('type', [
   z.object({ type: z.literal('auth'), token: z.string() }),
   z.object({ type: z.literal('attach'), sessionId: uuidSchema, projectId: z.string().min(1), afterSeq: z.number().int().nonnegative().optional() }),
   z.object({ type: z.literal('detach'), sessionId: uuidSchema }),
-  z.object({ type: z.literal('send'), sessionId: uuidSchema, text: z.string().min(1).max(200_000), attachments: z.array(z.string()).max(10).optional() }),
+  z.object({ type: z.literal('send'), sessionId: uuidSchema, text: z.string().min(1).max(200_000), attachments: z.array(z.string()).max(10).optional(), origin: z.literal('auto-compact').optional() }),
+  // the user dismissed the auto-compact prompt (only the web knows); recorded in the session log
+  z.object({ type: z.literal('compact.declined'), sessionId: uuidSchema, percentage: z.number().min(0).max(100) }),
   z.object({ type: z.literal('interrupt'), sessionId: uuidSchema }),
   z.object({ type: z.literal('shell'), sessionId: uuidSchema, command: z.string().trim().min(1).max(10_000) }),
   // id = existing /mcp card to refresh in place; absent = new card

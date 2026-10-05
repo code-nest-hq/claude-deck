@@ -62,9 +62,10 @@ export function attachWs(server: Server, o: { port: number; token: string; hub: 
             const why = blockedSlash(m.text);
             if (why) { fail('blocked', why, 'warn'); break; }
             touch(o.store, m.sessionId);
-            if ((await o.hub.send(m.sessionId, m.text, m.attachments)) === 'busy') fail('busy', 'sessão ocupada', 'warn');
+            if ((await o.hub.send(m.sessionId, m.text, m.attachments, m.origin)) === 'busy') fail('busy', 'sessão ocupada', 'warn');
             break;
           }
+          case 'compact.declined': o.hub.compactDeclined(m.sessionId, m.percentage); break;
           case 'interrupt': await o.hub.interrupt(m.sessionId); break;
           case 'shell':
             touch(o.store, m.sessionId);

@@ -7,6 +7,8 @@ Built-in `node:test` run through `tsx` — no test framework dependency. Two sui
 - `npm test` -> `unit.test.ts`: fast and free (no Claude process). Model Routing heuristic cases, `SessionHub` send flow with a fake runtime (`fakes.ts`: routing order, `/compact` skipping routing, process reuse, busy, the process exiting mid-classification), the daily error log (errorId, one entry per error, survives the crash-recovery snapshot), SDK message mapping (compaction), local `sessionExists`.
 - `npm run test:live` -> `live.test.ts`: the real Claude Code through the Agent SDK (Haiku, a few cents; needs a logged-in `claude`). Send/receive + turn totals + context usage, resume in a new process, the Haiku routing classifier on gray-zone prompts, and `SessionHub` end to end with routing on. Runs in a throwaway project dir and deletes the sessions it creates. Skipped unless `CCUI_LIVE=1`.
 
+Also covered in `unit.test.ts`: the session log (ordered appends, invalid ids ignored), what `SessionHub` records (events without deltas, routing verdict, process open/exit, who asked for `/compact`), secret masking patterns, `buildExport` on a fixture transcript (origins, usage deduplicated by message id, plugin attribution, merge order, masking counts) and the SSH transcript parser. The live classifier test also checks that a Haiku verdict reports its cost.
+
 Run `npm test` after any backend change; run `npm run test:live` when touching the runtime, routing, `SessionHub` or the SDK version.
 
 ## Real commands available (`package.json`)
@@ -38,8 +40,8 @@ When changing anything in `web/src/features/*` or the event protocol (`shared/sr
 - The read-only terminal (`CommandsPanel`) shows `!cmd` and Task tabs without accepting input.
 - Attachments: images arrive as images, other files as a path reference, local and SSH; interrupting while an attachment is still being read doesn't send it.
 - Folder browser: navigating/selecting works on local and SSH connections, in both folder and file mode.
-- Spend dashboard: today's totals match the turn summaries; the drill-down lists the right sessions.
 - `/mcp`: the list matches the terminal's `/mcp` (with and without an open session); Reconnect/Enable/Disable refresh the same card; Lean projects show no user MCPs.
+- Session export: the "Exportar" button downloads a `.jsonl` whose first line is the manifest; with the mask on, no known secret shows up; a session with subagents lists them in `sources.subagents`; an SSH session exports too; auto-compact accept/decline show up as `compact.requested`/`compact.declined` in the Deck lines.
 - Composer: `/command` coloring (blue/red), `!` highlight, resize, and blocked commands (`/clear`, `/model`…) show the explanation instead of being sent.
 
 ## Current limitation

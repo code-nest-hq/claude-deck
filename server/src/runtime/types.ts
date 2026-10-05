@@ -1,6 +1,5 @@
 import type { SpawnedProcess, SpawnOptions } from '@anthropic-ai/claude-agent-sdk';
 import type { DirEntry, Effort, EventBody, HistoryItem, McpAction, McpServerView, Model, ModelUsage, ShellResult, SlashCommandInfo, UsageTotals } from '@ccui/shared';
-import type { CostCheckpoint } from './jsonl';
 
 export interface SessionInfo { sessionId: string; summary: string; customTitle?: string; firstPrompt?: string; lastModified: number }
 
@@ -19,8 +18,8 @@ export interface Transport {
   sessionExists(sessionId: string, cwd: string): Promise<boolean>;
   /** custo/tokens acumulados da sessão (último `cost-state` do jsonl), ou null se ainda não há */
   usage(sessionId: string, cwd: string): Promise<{ totals: UsageTotals; modelUsage: Record<string, ModelUsage> } | null>;
-  /** todos os checkpoints de custo num trecho generoso (8 MB) do fim do jsonl; null se a sessão não existe/sem leitura */
-  costCheckpoints(sessionId: string, cwd: string): Promise<CostCheckpoint[] | null>;
+  /** the session's whole jsonl transcript plus its subagent transcripts; null when the session has none on disk */
+  readTranscript(sessionId: string, cwd: string): Promise<Transcript | null>;
   /** modo shell (`!cmd`): executa o comando DIGITADO PELO USUÁRIO no diretório do projeto (local ou remoto), com timeout e limite de saída */
   shell(cwd: string, command: string): Promise<ShellResult>;
   /** saída de `git status --porcelain=v2 --branch` do diretório, ou null (não é repositório / sem resposta) */
@@ -28,10 +27,16 @@ export interface Transport {
   /** espera não haver `claude` ativo para a sessão (remoto: turno terminando após queda de SSH). Lança no timeout. */
   waitSessionIdle(sessionId: string, timeoutMs: number): Promise<void>;
 }
+/** routing verdict: where it came from, and what the throwaway Haiku call cost (only when `source` is 'haiku') */
+export interface Classification { model: Model; source: 'heuristic' | 'learned' | 'haiku' | 'fallback'; costUsd?: number; durationMs: number }
+/** a session's raw Claude Code transcript (jsonl text) and its subagents' transcripts, for the export */
+export interface Transcript { main: string; subagents: Array<{ id: string; meta: string | null; jsonl: string }> }
 export interface OpenOptions {
   cwd: string; sessionId: string; model: Model; effort: Effort; lean: boolean; routing: boolean; permissionMode: 'default' | 'plan' | 'bypassPermissions';
 }
 export interface LiveSession {
+  /** true when the process resumed an existing session, false when it started a fresh one */
+  readonly resumed?: boolean;
   send(text: string, attachments?: string[]): void;
   interrupt(): Promise<void>;
   answerPermission(reqId: string, allow: boolean, updatedInput?: Record<string, unknown>): void;
@@ -57,7 +62,7 @@ export interface ClaudeRuntime {
   /** `/mcp` without a live session: short-lived process, no message sent (no token cost) */
   mcp(cwd: string, lean: boolean, action?: McpAction): Promise<{ servers: McpServerView[]; error?: string }>;
   /** decide Haiku ou Sonnet pra uma mensagem (heurística + fallback Haiku descartável) */
-  classify(cwd: string, text: string): Promise<Model>;
+  classify(cwd: string, text: string): Promise<Classification>;
   /** após uma queda: espera o claude da sessão terminar (não lança) */
   settle(sessionId: string, cwd: string): Promise<void>;
 }

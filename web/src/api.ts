@@ -1,4 +1,4 @@
-import type { Config, ConnStatus, Connection, DirEntry, Effort, GitInfo, LogEntry, Model, PlanUsage, ProfileView, Project, ProjectUsageView, SessionRow, SessionStatus, SlashCommandInfo, TodayUsage } from '@ccui/shared';
+import type { Config, ConnStatus, Connection, DirEntry, Effort, GitInfo, LogEntry, Model, PlanUsage, ProfileView, Project, SessionRow, SessionStatus, SlashCommandInfo } from '@ccui/shared';
 
 const KEY = 'ccui-token';
 let token: string | null = null;
@@ -44,10 +44,13 @@ export const api = {
   reload: (pid: string, sid: string) => req<{ live: boolean; plugins?: number; errors?: number }>('POST', `/api/projects/${pid}/sessions/${sid}/reload`),
   bgOutput: (pid: string, sid: string, taskId: string) => req<{ live: boolean; output: string | null }>('GET', `/api/projects/${pid}/sessions/${sid}/bg/${encodeURIComponent(taskId)}/output`),
   stopBgTask: (pid: string, sid: string, taskId: string) => req<{ stopped: boolean }>('POST', `/api/projects/${pid}/sessions/${sid}/bg/${encodeURIComponent(taskId)}/stop`),
+  exportSession: async (pid: string, sid: string, redact: boolean) => {
+    const r = await fetch(`/api/projects/${pid}/sessions/${sid}/export?redact=${redact ? 1 : 0}`, { headers: { Authorization: `Bearer ${token}` } });
+    if (!r.ok) throw new Error((await r.json().catch(() => null))?.error ?? `HTTP ${r.status}`);
+    return { blob: await r.blob(), filename: /filename="([^"]+)"/.exec(r.headers.get('Content-Disposition') ?? '')?.[1] ?? 'session.jsonl' };
+  },
   sessionStatus: (pid: string, sid: string) => req<SessionStatus>('GET', `/api/projects/${pid}/sessions/${sid}/status`),
   git: (pid: string) => req<GitInfo | null>('GET', `/api/projects/${pid}/git`),
-  usageToday: () => req<TodayUsage>('GET', '/api/usage/today'),
-  projectUsage: (id: string) => req<ProjectUsageView>('GET', `/api/projects/${id}/usage`),
   logs: (day?: string) => req<{ day: string; days: string[]; entries: LogEntry[] }>('GET', `/api/logs${day ? `?day=${day}` : ''}`),
   profiles: () => req<ProfileView[]>('GET', '/api/profiles'),
   addProfile: (name: string) => req<{ id: string; name: string }>('POST', '/api/profiles', { name }),

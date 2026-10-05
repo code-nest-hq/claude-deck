@@ -77,7 +77,10 @@ describe('Model Routing classifier (Haiku call for gray-zone prompts)', { skip: 
   ];
   for (const [text, want] of cases) {
     test(`${JSON.stringify(text.slice(0, 60))} -> ${want}`, { timeout: 30_000 }, async () => {
-      assert.equal(await rt.classify(cwd, text), want);
+      const c = await rt.classify(cwd, text);
+      assert.equal(c.model, want);
+      // the classifier's own spend is reported (a heuristic or learned verdict costs nothing)
+      if (c.source === 'haiku') assert.ok((c.costUsd ?? 0) > 0, `no cost for a Haiku verdict: ${JSON.stringify(c)}`);
     });
   }
 });
