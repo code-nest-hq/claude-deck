@@ -5,7 +5,8 @@ import { matchRow } from '../../lib/search';
 import { SIDEBAR_W_MAX, SIDEBAR_W_MIN, useApp } from '../../store';
 import { cycleTheme, getTheme, subscribeTheme, themeLabel } from '../../theme';
 import { AppSettingsModal } from '../../app/AppSettingsModal';
-import { IconSettings } from '../../lib/icons';
+import { IconSearch, IconSettings } from '../../lib/icons';
+import { jumpToLine, SearchModal } from '../chat/SearchModal';
 import { FolderBrowserModal } from './FolderBrowserModal';
 import { ProjectSettingsModal } from './ProjectSettingsModal';
 
@@ -203,7 +204,8 @@ export function Sidebar() {
                             {!pOpen && <Pulse {...pp} />}
                           </button>
                           <ProjectFlags p={p} />
-                          <button className="hidden rounded px-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-100 group-hover/p:block" title="Configurações do projeto" onClick={() => setUi({ settingsFor: p.id })}>⚙</button>
+                          <button className="hidden rounded px-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-100 group-hover/p:block" title="Pesquisar neste projeto" onClick={() => { /* empty query = warm the server's search cache while the modal opens */ void api.search(p.id, '').catch(() => {}); setUi({ searchFor: p.id }); }}><IconSearch className="h-3.5 w-3.5" /></button>
+                          <button className="hidden rounded px-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-100 group-hover/p:block" title="Configurações do projeto" onClick={() => setUi({ settingsFor: p.id })}><IconSettings className="h-3.5 w-3.5" /></button>
                           <button className="hidden rounded px-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-100 group-hover/p:block" title="Nova sessão neste projeto" onClick={() => setUi({ newSession: true, newFor: p.id })}>+</button>
                         </div>
                         {pOpen && (
@@ -257,6 +259,16 @@ export function Sidebar() {
           <IconSettings className="h-3.5 w-3.5" /> Configurações
         </button>
       </div>
+      {ui.searchFor && (
+        <SearchModal
+          placeholder="Pesquisar em todas as sessões do projeto…"
+          search={async (q) => (await api.search(ui.searchFor!, q)).hits.map((h, i) => ({
+            key: `${h.sessionId}:${i}`, label: h.role === 'user' ? 'você' : 'claude', session: h.name, pre: h.pre, match: h.match, post: h.post,
+            go: () => jumpToLine(ui.searchFor!, h.sessionId, h.line, h.match, h.nth),
+          }))}
+          onClose={() => setUi({ searchFor: null })}
+        />
+      )}
       {ui.settingsFor && <ProjectSettingsModal projectId={ui.settingsFor} onClose={() => setUi({ settingsFor: null })} />}
       {browsing && (
         <FolderBrowserModal

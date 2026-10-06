@@ -18,9 +18,13 @@ The terminal is great for coding, not so great for tracking several Claude Code 
 - **Refresh**: reloads skills and plugins from disk into the open session (for example, after creating a skill or installing a plugin) and refreshes the `/` command list, without restarting the session.
 - **Shell mode (`!cmd`)**: runs a command in the project directory without going through the model, with the `!` prefix highlighted in the composer. The output can be sent to Claude on demand.
 
+- **Search**: the **Pesquisar** button in the chat header searches the open session's messages as you type (5 results at a time, "show more" for the rest). Each result shows the matching line with the term underlined; clicking it scrolls to the message and underlines the term in the chat for 3 seconds or until the next click.
+- **Token usage breakdown**: the cost/tokens badge in the chat header opens a modal with input, output, cache write and cache read for the session and the last turn.
+
 **Projects**
 - **Local and remote (SSH) projects**: opens `claude` sessions on a remote host as if it were local. It survives SSH drops: the remote process finishes the turn on its own, and the UI reconnects and re-syncs history.
 - **Folder browser**: pick the project directory by browsing the local or remote filesystem, instead of typing the path.
+- **Project-wide search**: the magnifier next to a project (visible on hover) searches every session of that project, even ones that aren't open, straight from Claude Code's transcripts (local and SSH). Results also show the session name. Parsed text is cached on the server (LRU, 32 MB) and the cache is warmed when the modal opens.
 - **Per-project settings**: Lean mode (skips user hooks/plugins/skills/MCP/CLAUDE.md, much cheaper session start), Model Routing, and permission bypass (with explicit confirmation).
 - **Model Routing**: per message, picks Haiku (fast/cheap) or Sonnet (more capable). It uses a text heuristic, with a throwaway Haiku classifier as a fallback, and can escalate to Sonnet mid-turn when a task turns out harder than expected. It is opt-in per project (or per session). When off, the fixed configured model runs with zero overhead.
 
@@ -119,5 +123,6 @@ No automated test suite by project choice (see [`docs/testing.md`](docs/testing.
 | v1.4.0 | Profile page and multiple Claude account profiles (add, log in/out, switch for new local sessions) |
 | v1.5.0 | Plan usage modal per profile: 5-hour and weekly limits with resets and pace, per-model windows, extra credits, local usage drivers |
 | v1.6.0 | Per-session telemetry export (manifest + merged timeline, secret redaction, local/SSH), Deck-side session event log, classifier source/cost in routing; spend dashboard removed |
+| v1.7.0 | Search inside a session and across a whole project (cached, works for closed sessions), per-session token usage breakdown modal, project action icons restyled to the app's design |
 
 The design and decision history for each feature is in `docs/superpowers/{specs,plans}/`.

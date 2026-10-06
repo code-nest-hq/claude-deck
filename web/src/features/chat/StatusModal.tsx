@@ -50,7 +50,7 @@ export function StatusModal({ sessionId, name, project, config, chat, onClose }:
   );
   rows.push(
     ['Contexto', chat.context ? `${chat.context.percentage.toFixed(0)}% · ${fmtTokens(chat.context.totalTokens)} / ${fmtTokens(chat.context.maxTokens)}` : '— (após o próximo turno)'],
-    ['Tokens', `${fmtTokens(t.input + t.output)} (entrada ${fmtTokens(t.input)} · saída ${fmtTokens(t.output)} · cache leitura ${fmtTokens(t.cacheRead)})`],
+    ['Tokens', `${fmtTokens(t.input + t.output + t.cacheCreation + t.cacheRead)} (entrada ${fmtTokens(t.input)} · saída ${fmtTokens(t.output)} · cache escrita ${fmtTokens(t.cacheCreation)} · cache leitura ${fmtTokens(t.cacheRead)})`],
     ['Custo estimado', `$${t.costUsd.toFixed(4)}`],
   );
 

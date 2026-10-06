@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ModelUsage, SlashCommandInfo } from '@ccui/shared';
 import { fmtTokens } from '../../lib/format';
 import { useApp } from '../../store';
@@ -16,7 +16,9 @@ import { ShellCard } from './ShellCard';
 import { SkillsModal } from './SkillsModal';
 import { BgTasksModal } from './BgTasksModal';
 import { ExportModal } from './ExportModal';
+import { jumpTo, SearchModal, sessionSearch } from './SearchModal';
 import { StatusModal } from './StatusModal';
+import { UsageModal } from './UsageModal';
 import { ToolCard } from './ToolCard';
 
 const STUCK_MS = 60_000;
@@ -141,8 +143,10 @@ export function Chat() {
   const [sel, setSel] = useState(0);
   const [dismissed, setDismissed] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
+  const [usageOpen, setUsageOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [bgOpen, setBgOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [stampsOff, setStampsOff] = useState<Record<string, boolean>>({}); // per session; timestamps are on by default
   const end = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
@@ -175,12 +179,7 @@ export function Chat() {
   const connState = status[connId] ?? 'up';
   const connLabel = config?.connections.find((c) => c.id === connId)?.label ?? connId;
   const t = chat.totals;
-  const usageTitle = [
-    `Acumulado da sessão (inclui execuções anteriores): entrada ${t.input.toLocaleString('pt-BR')} + saída ${t.output.toLocaleString('pt-BR')} = ${(t.input + t.output).toLocaleString('pt-BR')} tokens`,
-    `Cache: escrita ${t.cacheCreation.toLocaleString('pt-BR')} · leitura ${t.cacheRead.toLocaleString('pt-BR')} (não entram na contagem acima)`,
-    chat.lastTokens ? `Último turno: entrada ${chat.lastTokens.input.toLocaleString('pt-BR')} · saída ${chat.lastTokens.output.toLocaleString('pt-BR')}` : '',
-    'Custo = estimativa a preço de API; em plano de assinatura não é uma cobrança.',
-  ].filter(Boolean).join('\n');
+  const allTokens = t.input + t.output + t.cacheCreation + t.cacheRead;
   const submit = () => {
     const t = text.trim();
     if (!t || !up) return;
@@ -211,11 +210,11 @@ export function Chat() {
       <header className="flex items-center justify-between gap-3 border-b border-zinc-800/60 bg-zinc-950/90 px-4 py-2.5 backdrop-blur-md">
         <h1 className="truncate text-sm font-medium tracking-tight text-zinc-100">{name}</h1>
         <div className="flex items-center gap-3">
-          <div className="hidden items-center gap-2 rounded-md border border-zinc-800/60 bg-zinc-900/50 px-2.5 py-1 font-mono text-xs text-zinc-400 sm:flex" title={usageTitle}>
+          <button className="hidden items-center gap-2 rounded-md border border-zinc-800/60 bg-zinc-900/50 px-2.5 py-1 font-mono text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-900 sm:flex" title="Ver consumo detalhado (entrada, saída, cache)" onClick={() => setUsageOpen(true)}>
             <span className="text-zinc-300">${chat.totals.costUsd.toFixed(4)}</span>
             <span className="text-zinc-600">·</span>
-            <span>{fmtTokens(chat.totals.input + chat.totals.output)} tokens</span>
-          </div>
+            <span>{fmtTokens(allTokens)} tokens</span>
+          </button>
           {!up && <span className="text-xs text-rose-400">desconectado…</span>}
           {busy && <button className="rounded-md border border-zinc-800 px-2.5 py-1 text-xs text-zinc-300 transition-colors hover:border-zinc-700 hover:bg-zinc-900" onClick={interrupt}>Pausar</button>}
           <button
@@ -230,6 +229,7 @@ export function Chat() {
           >
             {refresh.state === 'loading' ? 'Refreshing…' : refresh.state === 'done' ? 'Refreshed ✓' : refresh.state === 'error' ? 'Refresh failed' : 'Refresh'}
           </button>
+          <button className="rounded-md border border-zinc-800 px-2.5 py-1 text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-900" title="Pesquisar texto nesta sessão" onClick={() => setSearchOpen(true)}>Pesquisar</button>
           {chat.bgTasks.length > 0 && (() => {
             const running = chat.bgTasks.filter((t) => t.status === 'running').length;
             return (
@@ -259,10 +259,10 @@ export function Chat() {
           const next = chat.items[i + 1];
           const showTs = !stampsOff[active.sessionId] && it.ts !== undefined && (it.kind === 'user' || !next || next.kind === 'user' || (next.ts !== undefined && stamp(next.ts) !== stamp(it.ts)));
           return (
-            <Fragment key={i}>
+            <div key={i} data-i={i} className="space-y-3">
               <ItemView it={it} busy={busy} bypass={!!project?.bypass} commands={commands} />
               {showTs && <div className={`-mt-2 font-mono text-[10px] text-zinc-600 ${it.kind === 'user' ? 'text-right' : ''}`}>{stamp(it.ts!)}</div>}
-            </Fragment>
+            </div>
           );
         })}
         {chat.turnPhase !== 'idle' && chat.state !== 'awaiting_permission' && <TurnLoading phase={chat.turnPhase} tool={runningTool} startedAt={chat.turnPhaseAt} now={now} />}
@@ -297,6 +297,8 @@ export function Chat() {
       })()}
       {bgOpen && <BgTasksModal projectId={active.projectId} sessionId={active.sessionId} chat={chat} onClose={() => setBgOpen(false)} />}
       {exportOpen && <ExportModal projectId={active.projectId} sessionId={active.sessionId} onClose={() => setExportOpen(false)} />}
+      {searchOpen && <SearchModal placeholder="Pesquisar nesta sessão…" search={sessionSearch(chat.items, jumpTo)} onClose={() => setSearchOpen(false)} />}
+      {usageOpen && <UsageModal chat={chat} onClose={() => setUsageOpen(false)} />}
       {statusOpen && project && <StatusModal sessionId={active.sessionId} name={name} project={project} config={config} chat={chat} onClose={() => setStatusOpen(false)} />}
       <AutoCompactModal key={active.sessionId} sessionId={active.sessionId} chat={chat} enabled={!!project?.autoCompact} onCompact={() => send('/compact', false, 'auto-compact')} onDecline={compactDeclined} />
 

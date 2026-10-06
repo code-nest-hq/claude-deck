@@ -474,3 +474,17 @@ describe('remote transcript parsing', () => {
     assert.equal(r.subagents[0].meta, '{"agentType":"Explore"}');
   });
 });
+
+describe('findLines (text search)', () => {
+  test('one hit per matching line, case-insensitive, with the occurrence index', async () => {
+    const { findLines } = await import('@ccui/shared');
+    const hits = findLines('foo AllowEmission x\nnothing\nallowemission again; ALLOWEMISSION', 'AllowEmission');
+    assert.deepEqual(hits.map((h) => [h.nth, h.match]), [[0, 'AllowEmission'], [1, 'allowemission']]);
+  });
+  test('long lines are cropped around the match', async () => {
+    const { findLines } = await import('@ccui/shared');
+    const [h] = findLines(`${'a'.repeat(300)} NEEDLE ${'b'.repeat(300)}`, 'needle');
+    assert.equal(h.match, 'NEEDLE');
+    assert.ok(h.pre.startsWith('…') && h.post.endsWith('…') && h.pre.length + h.post.length < 200);
+  });
+});

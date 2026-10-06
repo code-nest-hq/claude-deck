@@ -1,4 +1,4 @@
-import type { Config, ConnStatus, Connection, DirEntry, Effort, GitInfo, LogEntry, Model, PlanUsage, ProfileView, Project, SessionRow, SessionStatus, SlashCommandInfo } from '@ccui/shared';
+import type { Config, ConnStatus, Connection, DirEntry, Effort, GitInfo, LogEntry, Model, PlanUsage, ProfileView, Project, ProjectHit, SessionRow, SessionStatus, SlashCommandInfo } from '@ccui/shared';
 
 const KEY = 'ccui-token';
 let token: string | null = null;
@@ -44,6 +44,7 @@ export const api = {
   reload: (pid: string, sid: string) => req<{ live: boolean; plugins?: number; errors?: number }>('POST', `/api/projects/${pid}/sessions/${sid}/reload`),
   bgOutput: (pid: string, sid: string, taskId: string) => req<{ live: boolean; output: string | null }>('GET', `/api/projects/${pid}/sessions/${sid}/bg/${encodeURIComponent(taskId)}/output`),
   stopBgTask: (pid: string, sid: string, taskId: string) => req<{ stopped: boolean }>('POST', `/api/projects/${pid}/sessions/${sid}/bg/${encodeURIComponent(taskId)}/stop`),
+  search: (pid: string, q: string) => req<{ hits: ProjectHit[]; truncated: boolean }>('GET', `/api/projects/${pid}/search?q=${encodeURIComponent(q)}`),
   exportSession: async (pid: string, sid: string, redact: boolean) => {
     const r = await fetch(`/api/projects/${pid}/sessions/${sid}/export?redact=${redact ? 1 : 0}`, { headers: { Authorization: `Bearer ${token}` } });
     if (!r.ok) throw new Error((await r.json().catch(() => null))?.error ?? `HTTP ${r.status}`);
