@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { McpServerView, McpStatus } from '@ccui/shared';
 import { useApp } from '../../store';
 import type { Item } from './reduce';
@@ -29,54 +29,73 @@ function Status({ s }: { s: McpStatus }) {
   return <span className={cls}>{icon} {label}</span>;
 }
 
-// `/mcp` result: list grouped by scope; clicking a server opens its details and actions, like the terminal
-export function McpCard({ it }: { it: Mcp }) {
+// "MCP" header button / `/mcp`: interactive modal; reads the latest `mcp` item of the chat (opening it requests a fresh status)
+export function McpModal({ it, onClose }: { it?: Mcp; onClose: () => void }) {
   const mcp = useApp((s) => s.mcp);
   const [open, setOpen] = useState<string | null>(null);
   const [showTools, setShowTools] = useState(false);
-  const servers = it.servers ?? [];
+  const [q, setQ] = useState('');
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  });
+  const servers = it?.servers ?? [];
+  const loading = !it || it.loading;
   const count = (s: McpStatus) => servers.filter((x) => x.status === s).length;
   const known = new Set(SCOPES.map(([k]) => k));
+  const shown = servers.filter((x) => x.name.toLowerCase().includes(q.trim().toLowerCase()));
   const groups = [
-    ...SCOPES.map(([k, label]) => [label, servers.filter((x) => x.scope === k)] as const),
-    ['Other MCPs', servers.filter((x) => !x.scope || !known.has(x.scope))] as const,
+    ...SCOPES.map(([k, label]) => [label, shown.filter((x) => x.scope === k)] as const),
+    ['Other MCPs', shown.filter((x) => !x.scope || !known.has(x.scope))] as const,
   ].filter(([, list]) => list.length > 0);
   const sel = servers.find((x) => x.name === open);
-  const act = (kind: 'reconnect' | 'enable' | 'disable', server: string) => mcp(it.id, { kind, server });
+  const act = (kind: 'reconnect' | 'enable' | 'disable', server: string) => it && mcp(it.id, { kind, server });
 
   return (
-    <div className="rounded-md border border-zinc-800/90 bg-zinc-950 px-3 py-2 font-mono text-xs text-zinc-300">
-      <div className="flex items-center gap-2">
-        <span className="font-semibold text-zinc-100">Manage MCP servers</span>
-        <span className="text-zinc-500">
-          {it.servers ? `${servers.length} server(s) · ${count('connected')} connected · ${count('failed') + count('needs-auth')} need attention · ${count('disabled')} disabled` : ''}
-        </span>
-        <span className="flex-1" />
-        {it.loading
-          ? <span className="font-sans text-zinc-500">loading…</span>
-          : <button className="font-sans text-[11px] text-zinc-500 hover:text-zinc-200" onClick={() => mcp(it.id)}>Refresh</button>}
-      </div>
-      {it.error && <div className="mt-1 whitespace-pre-wrap text-rose-300">{it.error}</div>}
-      {it.servers && servers.length === 0 && !it.error && <div className="mt-1 text-zinc-500">No MCP servers configured.</div>}
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 text-left font-sans" onClick={onClose}>
+      <div className="max-h-[80vh] w-[40rem] max-w-[calc(100vw-2rem)] overflow-auto rounded-lg border border-zinc-700 bg-zinc-950 p-4 font-mono text-xs text-zinc-300" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-2">
+          <h2 className="font-sans text-sm font-semibold text-zinc-100">MCP servers</h2>
+          <span className="text-zinc-500">
+            {it?.servers ? `${servers.length} · ${count('connected')} connected · ${count('failed') + count('needs-auth')} need attention · ${count('disabled')} disabled` : ''}
+          </span>
+          <span className="flex-1" />
+          {loading
+            ? <span className="font-sans text-zinc-500">loading…</span>
+            : <button className="font-sans text-[11px] text-zinc-500 hover:text-zinc-200" onClick={() => mcp()}>Refresh</button>}
+          <button className="font-sans text-xs text-zinc-500 hover:text-zinc-200" onClick={onClose}>Fechar</button>
+        </div>
+        {it?.error && <div className="mt-2 whitespace-pre-wrap text-rose-300">{it.error}</div>}
+        {it?.servers && servers.length === 0 && !it.error && <div className="mt-2 text-zinc-500">No MCP servers configured.</div>}
 
-      {sel ? (
-        <ServerDetail
-          s={sel} busy={it.loading} showTools={showTools}
-          onBack={() => { setOpen(null); setShowTools(false); }}
-          onTools={() => setShowTools((v) => !v)} onAction={(k) => act(k, sel.name)}
-        />
-      ) : (
-        groups.map(([label, list]) => (
-          <div key={label} className="mt-2">
-            <div className="text-zinc-500">{label}</div>
-            {list.map((x) => (
-              <button key={x.name} className="block w-full rounded px-2 py-0.5 text-left hover:bg-zinc-800/70" onClick={() => setOpen(x.name)}>
-                <span className="text-zinc-100">{x.name}</span> <span className="text-zinc-600">·</span> <Status s={x.status} />
-              </button>
+        {sel ? (
+          <ServerDetail
+            s={sel} busy={loading} showTools={showTools}
+            onBack={() => { setOpen(null); setShowTools(false); }}
+            onTools={() => setShowTools((v) => !v)} onAction={(k) => act(k, sel.name)}
+          />
+        ) : (
+          <>
+            {servers.length > 5 && (
+              <input className="mt-2 w-full rounded border border-zinc-800 bg-zinc-900 px-2 py-1 font-sans outline-none focus:border-zinc-600" placeholder="Filtrar servidores…" value={q} onChange={(e) => setQ(e.target.value)} autoFocus />
+            )}
+            {groups.map(([label, list]) => (
+              <div key={label} className="mt-3">
+                <div className="text-zinc-500">{label}</div>
+                {list.map((x) => (
+                  <button key={x.name} className="mt-1 flex w-full items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900/40 px-3 py-1.5 text-left transition-colors hover:border-zinc-700 hover:bg-zinc-800/70" onClick={() => setOpen(x.name)}>
+                    <span className="text-zinc-100">{x.name}</span>
+                    <span className="flex-1" />
+                    {x.status === 'connected' && <span className="text-zinc-500">{x.tools.length} tool(s)</span>}
+                    <Status s={x.status} />
+                  </button>
+                ))}
+              </div>
             ))}
-          </div>
-        ))
-      )}
+          </>
+        )}
+      </div>
     </div>
   );
 }
