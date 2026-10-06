@@ -4,12 +4,13 @@ import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import {
   createConnectionBody, createProfileBody, createProjectBody, createSessionBody, lastConnectionBody, loginCodeBody, patchConfigBody, patchProjectBody, patchSessionBody, uuidSchema,
-  type Connection, type Project, type SessionMeta, type SessionStatus, type SlashCommandInfo,
+  findLines, type Connection, type HistoryItem, type Project, type ProjectHit, type SessionMeta, type SessionStatus, type SlashCommandInfo,
 } from '@ccui/shared';
 import { versionWarning, type Connections } from './connections';
 import { ensureMeta, listProjectSessions, openSpecFor } from './domain';
 import { buildExport } from './export';
 import { parseGitStatus } from './git';
+import { parseHistory } from './runtime/jsonl';
 import { logDay, logDays, readLogs } from './logs';
 import { activate, DEFAULT_PROFILE, knownProfile, listProfiles, logout, removeProfile, sendCode, startLogin, usageFor } from './profiles';
 import type { SessionHub } from './hub';
@@ -154,6 +155,53 @@ export function buildApi({ store, hub, conns }: Deps) {
     const p = project(c.req.param('id'));
     if (!p) return c.json({ error: 'projeto desconhecido' }, 404);
     return c.json(await listProjectSessions(store, conns.get(p.connectionId).runtime, hub, p));
+  });
+
+  // text search over every session of the project (read from the Claude Code transcripts, no live session needed).
+  // Parsed messages are cached per session and re-read only when its lastModified changes; a query shorter than 2 chars just warms the cache.
+  // LRU by total text length (Map order = recency); measured: 311 sessions = 162 MB of jsonl but only 8.6 MB of text, so 32 MB leaves ~4x headroom
+  const CACHE_MAX_CHARS = 32 * 1024 * 1024;
+  const searchCache = new Map<string, { lastModified: number; msgs: Promise<HistoryItem[] | null>; size: number }>();
+  let cacheChars = 0;
+  const dropCached = (sid: string) => { cacheChars -= searchCache.get(sid)?.size ?? 0; searchCache.delete(sid); };
+  api.get('/projects/:id/search', async (c) => {
+    const p = project(c.req.param('id'));
+    const q = (c.req.query('q') ?? '').trim();
+    if (!p) return c.json({ error: 'projeto desconhecido' }, 404);
+    const { transport, runtime } = conns.get(p.connectionId);
+    const rows = await listProjectSessions(store, runtime, hub, p);
+    const messages = (r: { sessionId: string; lastModified: number }) => {
+      const hit = searchCache.get(r.sessionId);
+      if (hit && hit.lastModified === r.lastModified) { searchCache.delete(r.sessionId); searchCache.set(r.sessionId, hit); return hit.msgs; } // refresh recency
+      if (hit) dropCached(r.sessionId);
+      const msgs = transport.readTranscript(r.sessionId, p.path).then((t) => (t ? parseHistory(t.main) : null)).catch(() => null);
+      const entry = { lastModified: r.lastModified, msgs, size: 0 };
+      searchCache.set(r.sessionId, entry);
+      void msgs.then((m) => {
+        if (searchCache.get(r.sessionId) !== entry) return; // replaced or evicted meanwhile
+        if (!m) { dropCached(r.sessionId); return; } // retry unreadable ones next time
+        entry.size = m.reduce((n, h) => n + h.text.length, 0);
+        cacheChars += entry.size;
+        for (const sid of searchCache.keys()) { // evict least recently used, never the one just loaded
+          if (cacheChars <= CACHE_MAX_CHARS || sid === r.sessionId) break;
+          dropCached(sid);
+        }
+      });
+      return msgs;
+    };
+    const MAX = 200;
+    const hits: ProjectHit[] = [];
+    for (let i = 0; i < rows.length; i += 4) { // 4 transcripts at a time
+      const batch = await Promise.all(rows.slice(i, i + 4).map(async (r) => ({ r, msgs: await messages(r) })));
+      if (q.length < 2) continue;
+      for (const { r, msgs } of batch) {
+        for (const h of msgs ?? []) {
+          for (const l of findLines(h.text, q)) hits.push({ ...l, sessionId: r.sessionId, name: r.name, role: h.role });
+        }
+      }
+      if (hits.length > MAX) break;
+    }
+    return c.json({ hits: hits.slice(0, MAX), truncated: hits.length > MAX });
   });
 
   // comandos `/` do projeto para o autocomplete; cache de 5 min por (projeto, lean); falha => lista vazia (a UI tenta de novo depois)

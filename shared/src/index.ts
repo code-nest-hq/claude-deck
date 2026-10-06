@@ -175,3 +175,36 @@ export type ServerMsg =
   | { type: 'error'; code: string; message: string; errorId?: string }
   | { type: 'log'; entry: LogEntry }
   | { type: 'connection.status'; id: string; status: ConnStatus; message?: string };
+
+// text search: one hit per line of `text` containing `term` (case-insensitive); lines longer than `maxLine` are cropped around the match
+export interface LineHit { nth: number; line: string; pre: string; match: string; post: string }
+export function findLines(text: string, term: string, maxLine = 160): LineHit[] {
+  const needle = term.toLowerCase();
+  const lower = text.toLowerCase();
+  const hits: LineHit[] = [];
+  if (!needle) return hits;
+  let pos = 0; // offset of the current line in the text
+  for (const line of text.split('\n')) {
+    const lineStart = pos;
+    pos += line.length + 1;
+    const at = lower.indexOf(needle, lineStart);
+    if (at < 0 || at + needle.length > lineStart + line.length) continue;
+    let nth = 0; // which occurrence of the term in the text this is
+    for (let k = lower.indexOf(needle); k >= 0 && k < at; k = lower.indexOf(needle, k + 1)) nth++;
+    const col = at - lineStart;
+    let start = 0;
+    let end = line.length;
+    if (line.length > maxLine) {
+      start = Math.max(0, col - Math.floor((maxLine - term.length) / 3));
+      end = Math.min(line.length, start + maxLine);
+    }
+    hits.push({
+      nth, line: line.slice(0, 1000),
+      pre: (start > 0 ? '…' : '') + line.slice(start, col),
+      match: line.slice(col, col + term.length),
+      post: line.slice(col + term.length, end) + (end < line.length ? '…' : ''),
+    });
+  }
+  return hits;
+}
+export interface ProjectHit extends LineHit { sessionId: string; name: string; role: 'user' | 'assistant' }
