@@ -14,7 +14,7 @@ api.ts                HTTP client + token
 notify.ts             Notification API (opt-in, never shows message content)
 theme.ts              light/dark/system theme (outside React, localStorage)
 features/chat/        Chat, reduce.ts (event reducer), Markdown, GitBar, CommandsPanel,
-                       ShellCard, McpCard, SlashMenu, ToolCard, AttachMenu, AskUserQuestionModal
+                       ShellCard, McpModal, SlashMenu, ToolCard, AttachMenu, AskUserQuestionModal
 features/sessions/    Tabs, Palette (Ctrl+K), Shortcuts (? modal), NewSessionModal
 features/projects/    Sidebar, ProjectSettingsModal (lean/routing/auto-compact/bypass),
                        FolderBrowserModal (pick a folder, or files to attach)
@@ -59,7 +59,8 @@ Main actions: `open()`, `closeTab()`, `send()` (includes the session's staged at
 | Read-only terminal | `features/chat/CommandsPanel.tsx` | shows `!` commands and per-Task (subagent) tabs; doesn't accept input — a deliberate decision, see `docs/architecture.md` |
 | Slash autocomplete | `features/chat/SlashMenu.tsx` | ranking: prefix > alias > name contains > description contains, max 40 items |
 | Composer | `features/chat/Chat.tsx` | height-resizable box with attach button and staged-files bar; a mirror div behind a transparent-text textarea colors the `/command` (blue = exists, red = unknown) and the `!` prefix; `/mcp` and `!cmd` are intercepted in `submit()` and never reach the model |
-| `/mcp` panel | `features/chat/McpCard.tsx` | servers grouped by scope, status icons like the terminal; click for details, tools, Reconnect/Enable/Disable; needs-auth claude.ai connectors link to claude.ai settings |
+| MCP modal (header "MCP" button or `/mcp`) | `features/chat/McpModal.tsx` | servers grouped by scope, status icons like the terminal; click for details, tools, Reconnect/Enable/Disable; needs-auth claude.ai connectors link to claude.ai settings |
+| Rich input (pencil icon) | `features/chat/RichEditor.tsx` | Tiptap email-style editor: B/I/list/code/code block, Enter breaks line, Ctrl+Enter or Send button sends; output is markdown. Plain mode keeps `/` and `!` handling |
 | Logs | `features/logs/LogsPage.tsx` | Daily error log, live (`logs` in the store); filter by day, project, level, free text / error ID. The error ID under a chat error opens it here |
 | Session status | `features/chat/StatusModal.tsx` | "Status" button in the chat header: read-only session ID (copy), path, connection, profile, effective model/effort/routing/permissions (`GET /api/projects/:id/sessions/:sid/status`, resolved by `openSpecFor`), context occupancy, tokens and cost |
 | Session export | `features/chat/ExportModal.tsx` | "Exportar" header button: "mask secrets" checkbox (on by default) + download of the session's full-overview `.jsonl` for analysis by another AI (`api.exportSession` fetches with the bearer token and saves the blob; a plain link would lack the auth header). |

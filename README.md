@@ -25,6 +25,8 @@ The terminal is great for coding, not so great for tracking several Claude Code 
 - **Local and remote (SSH) projects**: opens `claude` sessions on a remote host as if it were local. It survives SSH drops: the remote process finishes the turn on its own, and the UI reconnects and re-syncs history.
 - **Folder browser**: pick the project directory by browsing the local or remote filesystem, instead of typing the path.
 - **Project-wide search**: the magnifier next to a project (visible on hover) searches every session of that project, even ones that aren't open, straight from Claude Code's transcripts (local and SSH). Results also show the session name. Parsed text is cached on the server (LRU, 32 MB) and the cache is warmed when the modal opens.
+- **MCP modal**: the **MCP** button in the chat header (or typing `/mcp`) opens a modal listing every MCP server by scope with its status and tool count; click one for details, tools and Enable/Disable/Reconnect.
+- **Rich input**: the pencil icon in the composer switches to an email-style editor (bold, italic, bullet lists via `* `, inline code, code blocks). Enter breaks the line; Ctrl+Enter or the Send button sends, as markdown. `/` commands and `!` shell stay in plain mode.
 - **Per-project settings**: Lean mode (skips user hooks/plugins/skills/MCP/CLAUDE.md, much cheaper session start), Model Routing, and permission bypass (with explicit confirmation).
 - **Model Routing**: per message, picks Haiku (fast/cheap) or Sonnet (more capable). It uses a text heuristic, with a throwaway Haiku classifier as a fallback, and can escalate to Sonnet mid-turn when a task turns out harder than expected. It is opt-in per project (or per session). When off, the fixed configured model runs with zero overhead.
 
@@ -124,5 +126,7 @@ No automated test suite by project choice (see [`docs/testing.md`](docs/testing.
 | v1.5.0 | Plan usage modal per profile: 5-hour and weekly limits with resets and pace, per-model windows, extra credits, local usage drivers |
 | v1.6.0 | Per-session telemetry export (manifest + merged timeline, secret redaction, local/SSH), Deck-side session event log, classifier source/cost in routing; spend dashboard removed |
 | v1.7.0 | Search inside a session and across a whole project (cached, works for closed sessions), per-session token usage breakdown modal, project action icons restyled to the app's design |
+| v1.8.0 | MCP modal (header **MCP** button or `/mcp`) to inspect servers and enable/disable/reconnect them, email-style rich input (pencil icon: bold, italic, lists, code; Ctrl+Enter or Send button, sent as markdown) |
+| v1.9.0 | Structured findings: a trailing JSON array in skill output (e.g. `/code-review`) renders as a findings list instead of a raw code block |
 
 The design and decision history for each feature is in `docs/superpowers/{specs,plans}/`.

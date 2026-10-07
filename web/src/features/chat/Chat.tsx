@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ModelUsage, SlashCommandInfo } from '@ccui/shared';
 import { fmtTokens } from '../../lib/format';
 import { useApp } from '../../store';
-import { IconLock, IconShuffle } from '../../lib/icons';
+import { IconLock, IconPencil, IconSend, IconShuffle } from '../../lib/icons';
 import { AskUserQuestionModal, isAskUserQuestion } from './AskUserQuestionModal';
 import { AttachMenu } from './AttachMenu';
 import { AutoCompactModal } from './AutoCompactModal';
@@ -10,7 +10,8 @@ import { CommandsPanel } from './CommandsPanel';
 import { GitBar } from './GitBar';
 import { Markdown } from './Markdown';
 import type { Item, SkillUse } from './reduce';
-import { McpCard } from './McpCard';
+import { McpModal } from './McpModal';
+import { RichEditor } from './RichEditor';
 import { matchCommands, SlashMenu } from './SlashMenu';
 import { ShellCard } from './ShellCard';
 import { SkillsModal } from './SkillsModal';
@@ -61,7 +62,7 @@ function ItemView({ it, busy, bypass, commands }: { it: Item; busy: boolean; byp
   if (it.kind === 'assistant') return <Markdown text={it.text} />;
   if (it.kind === 'error') return <ErrorItem text={it.text} errorId={it.errorId} />;
   if (it.kind === 'shell') return <ShellCard it={it} busy={busy} />;
-  if (it.kind === 'mcp') return <McpCard it={it} />;
+  if (it.kind === 'mcp') return null; // rendered by McpModal
   if (it.kind === 'turn') return <TurnSummary modelUsage={it.modelUsage} skills={it.skills} commands={commands} bypass={bypass} />;
   return <ToolCard it={it} />;
 }
@@ -147,6 +148,10 @@ export function Chat() {
   const [exportOpen, setExportOpen] = useState(false);
   const [bgOpen, setBgOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [mcpOpen, setMcpOpen] = useState(false);
+  const [rich, setRich] = useState(false); // email-style input (pencil): Enter breaks line, Ctrl+Enter sends markdown
+  const [richMd, setRichMd] = useState('');
+  const [richKey, setRichKey] = useState(0); // remount = clear the editor
   const [stampsOff, setStampsOff] = useState<Record<string, boolean>>({}); // per session; timestamps are on by default
   const end = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
@@ -180,13 +185,15 @@ export function Chat() {
   const connLabel = config?.connections.find((c) => c.id === connId)?.label ?? connId;
   const t = chat.totals;
   const allTokens = t.input + t.output + t.cacheCreation + t.cacheRead;
+  const openMcp = () => { setMcpOpen(true); mcp(); };
   const submit = () => {
-    const t = text.trim();
+    const t = (rich ? richMd : text).trim();
     if (!t || !up) return;
+    if (rich) { if (!busy) { send(t); setRichMd(''); setRichKey((k) => k + 1); } return; } // no "/" or "!" handling here: plain mode only
     // modo shell: "!comando" roda direto no diretório do projeto (não vai ao modelo)
     if (t.startsWith('!')) { const cmd = t.slice(1).trim(); if (cmd) { shell(cmd); setText(''); } return; }
-    // /mcp: interactive panel like the terminal's, instead of the CLI's one-line text summary (not sent to the model)
-    if (t === '/mcp') { mcp(); setText(''); return; }
+    // /mcp: interactive modal like the terminal's panel, instead of the CLI's one-line text summary (not sent to the model)
+    if (t === '/mcp') { openMcp(); setText(''); return; }
     if (!busy) { send(t); setText(''); }
   };
   const pick = (c: SlashCommandInfo) => { setText(`/${c.name} `); setSel(0); input.current?.focus(); };
@@ -230,6 +237,7 @@ export function Chat() {
             {refresh.state === 'loading' ? 'Refreshing…' : refresh.state === 'done' ? 'Refreshed ✓' : refresh.state === 'error' ? 'Refresh failed' : 'Refresh'}
           </button>
           <button className="rounded-md border border-zinc-800 px-2.5 py-1 text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-900" title="Pesquisar texto nesta sessão" onClick={() => setSearchOpen(true)}>Pesquisar</button>
+          <button className="rounded-md border border-zinc-800 px-2.5 py-1 text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-900" title="Servidores MCP: status, enable/disable, reconnect" onClick={openMcp}>MCP</button>
           {chat.bgTasks.length > 0 && (() => {
             const running = chat.bgTasks.filter((t) => t.status === 'running').length;
             return (
@@ -258,6 +266,7 @@ export function Chat() {
           // one timestamp per minute: after each user message, and after the last item of each same-minute run of output
           const next = chat.items[i + 1];
           const showTs = !stampsOff[active.sessionId] && it.ts !== undefined && (it.kind === 'user' || !next || next.kind === 'user' || (next.ts !== undefined && stamp(next.ts) !== stamp(it.ts)));
+          if (it.kind === 'mcp') return null; // shown in McpModal, not inline
           return (
             <div key={i} data-i={i} className="space-y-3">
               <ItemView it={it} busy={busy} bypass={!!project?.bypass} commands={commands} />
@@ -298,6 +307,7 @@ export function Chat() {
       {bgOpen && <BgTasksModal projectId={active.projectId} sessionId={active.sessionId} chat={chat} onClose={() => setBgOpen(false)} />}
       {exportOpen && <ExportModal projectId={active.projectId} sessionId={active.sessionId} onClose={() => setExportOpen(false)} />}
       {searchOpen && <SearchModal placeholder="Pesquisar nesta sessão…" search={sessionSearch(chat.items, jumpTo)} onClose={() => setSearchOpen(false)} />}
+      {mcpOpen && <McpModal it={chat.items.findLast((x) => x.kind === 'mcp')} onClose={() => setMcpOpen(false)} />}
       {usageOpen && <UsageModal chat={chat} onClose={() => setUsageOpen(false)} />}
       {statusOpen && project && <StatusModal sessionId={active.sessionId} name={name} project={project} config={config} chat={chat} onClose={() => setStatusOpen(false)} />}
       <AutoCompactModal key={active.sessionId} sessionId={active.sessionId} chat={chat} enabled={!!project?.autoCompact} onCompact={() => send('/compact', false, 'auto-compact')} onDecline={compactDeclined} />
@@ -306,6 +316,7 @@ export function Chat() {
         {menuOpen && <SlashMenu items={matches} sel={Math.min(sel, matches.length - 1)} lean={!!project?.lean} onPick={pick} onHover={setSel} />}
         <div className="flex flex-col rounded-xl border border-zinc-800 bg-zinc-900/90 transition-colors focus-within:border-zinc-700">
           <AttachedFilesPill sessionId={active.sessionId} connectionId={connId} />
+          {rich ? <RichEditor key={richKey} disabled={busy || !up} placeholder={busy ? 'Aguarde a resposta…' : 'Mensagem… (Enter quebra linha · Ctrl+Enter envia · "* " cria lista)'} onChange={setRichMd} onSend={submit} /> : (
           <div className="relative">
             {mirrored && (
               // mirror behind a transparent-text textarea, so only the command token (or "!" shell prefix) gets colored
@@ -326,8 +337,12 @@ export function Chat() {
               onKeyDown={onKeyDown}
             />
           </div>
+          )}
           <div className="flex items-center px-1 py-1">
             <AttachMenu sessionId={active.sessionId} connectionId={connId} />
+            <button className={`ml-1 rounded-md p-1.5 transition-colors ${rich ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200'}`} title="Formatação (Ctrl+Enter envia)" onClick={() => { setRich((r) => !r); setRichMd(''); setRichKey((k) => k + 1); }}><IconPencil className="h-4 w-4" /></button>
+            <span className="flex-1" />
+            <button className="rounded-md p-1.5 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100 disabled:opacity-40" title={rich ? 'Enviar (Ctrl+Enter)' : 'Enviar (Enter)'} disabled={busy || !up || !(rich ? richMd : text).trim()} onClick={submit}><IconSend className="h-4 w-4" /></button>
           </div>
         </div>
       </div>
