@@ -127,5 +127,6 @@ No automated test suite by project choice (see [`docs/testing.md`](docs/testing.
 | v1.6.0 | Per-session telemetry export (manifest + merged timeline, secret redaction, local/SSH), Deck-side session event log, classifier source/cost in routing; spend dashboard removed |
 | v1.7.0 | Search inside a session and across a whole project (cached, works for closed sessions), per-session token usage breakdown modal, project action icons restyled to the app's design |
 | v1.8.0 | MCP modal (header **MCP** button or `/mcp`) to inspect servers and enable/disable/reconnect them, email-style rich input (pencil icon: bold, italic, lists, code; Ctrl+Enter or Send button, sent as markdown) |
+| v1.9.0 | Structured findings: a trailing JSON array in skill output (e.g. `/code-review`) renders as a findings list instead of a raw code block |
 
 The design and decision history for each feature is in `docs/superpowers/{specs,plans}/`.
