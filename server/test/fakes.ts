@@ -66,6 +66,7 @@ export function fakeRuntime(o: { classify?: (text: string) => Promise<Model>; on
     async commands() { return []; },
     async mcp() { return { servers: [] }; },
     async classify(_cwd, text) { rt.classified.push(text); return { model: await (o.classify ? o.classify(text) : 'haiku'), source: 'heuristic', durationMs: 0 }; },
+    async handoffNotes() { return { text: '- Decisions: none' }; },
     async settle() {},
   };
   return rt;

@@ -128,5 +128,6 @@ No automated test suite by project choice (see [`docs/testing.md`](docs/testing.
 | v1.7.0 | Search inside a session and across a whole project (cached, works for closed sessions), per-session token usage breakdown modal, project action icons restyled to the app's design |
 | v1.8.0 | MCP modal (header **MCP** button or `/mcp`) to inspect servers and enable/disable/reconnect them, email-style rich input (pencil icon: bold, italic, lists, code; Ctrl+Enter or Send button, sent as markdown) |
 | v1.9.0 | Structured findings: a trailing JSON array in skill output (e.g. `/code-review`) renders as a findings list instead of a raw code block |
+| v1.10.0 | New session with handoff: third option of the auto-compact prompt opens a clean session seeded with a locally built summary of the old one (goal, requests, files, commits, todos, last message), optionally enriched by Haiku |
 
 The design and decision history for each feature is in `docs/superpowers/{specs,plans}/`.

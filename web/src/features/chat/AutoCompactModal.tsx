@@ -12,7 +12,7 @@ const handled = new Map<string, number>();
 
 // Auto-compact (project toggle): after each turn above the threshold asks to run `/compact`; while it runs, shows an
 // ESTIMATED progress (the SDK only reports start and end of a compaction). Also shows the CLI's own auto-compact.
-export function AutoCompactModal({ sessionId, chat, enabled, onCompact, onDecline }: { sessionId: string; chat: Chat; enabled: boolean; onCompact: () => void; onDecline: (percentage: number) => void }) {
+export function AutoCompactModal({ sessionId, chat, enabled, onCompact, onDecline, onHandoff }: { sessionId: string; chat: Chat; enabled: boolean; onCompact: () => void; onDecline: (percentage: number) => void; onHandoff: () => void }) {
   const [run, setRun] = useState<{ seq: number; at: number } | null>(null);
   const [hidden, setHidden] = useState(false);
   const [now, setNow] = useState(Date.now());
@@ -47,6 +47,9 @@ export function AutoCompactModal({ sessionId, chat, enabled, onCompact, onDeclin
     if (yes) { setRun({ seq: chat.lastSeq, at: Date.now() }); onCompact(); } else { onDecline(ctx!.percentage); rerender((n) => n + 1); }
   };
 
+  // "new session with handoff" instead of compacting: counts as answered, so the prompt doesn't come back this turn
+  const handoff = () => { handled.set(sessionId, ctx!.seq); rerender((n) => n + 1); onHandoff(); };
+
   // asymptotic estimate, time constant scaled by context size (~30 s for 120k tokens)
   const startedAt = run?.at ?? cmp?.startedAt ?? now;
   const tau = Math.max(10_000, ((ctx?.totalTokens ?? 100_000) / 1000) * 250);
@@ -65,6 +68,7 @@ export function AutoCompactModal({ sessionId, chat, enabled, onCompact, onDeclin
             </p>
             <div className="mt-4 flex justify-end gap-1.5">
               <button className="rounded-md px-2.5 py-1.5 text-xs font-medium text-zinc-400 transition-colors hover:bg-zinc-900 hover:text-zinc-200" onClick={() => answer(false)}>Cancelar</button>
+              <button className="rounded-md px-2.5 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-900 hover:text-zinc-100" title="Abre uma sessão limpa com um resumo do que foi feito, sem carregar o histórico" onClick={handoff}>Nova sessão com handoff</button>
               <button className="rounded-md bg-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-950 transition-colors hover:bg-zinc-200" onClick={() => answer(true)}>Compactar</button>
             </div>
           </>

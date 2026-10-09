@@ -4,6 +4,7 @@ import { createSdkMcpServer, query, tool, type CanUseTool, type McpServerStatus,
 import { EFFORTS, MODELS, type EventBody, type HistoryItem, type McpAction, type McpServerView, type Model, type ModelUsage, type PlanUsage, type ShellResult, type SlashCommandInfo, type UsageTotals } from '@ccui/shared';
 import { z } from 'zod';
 import { visibleCommands } from '../commands';
+import { HANDOFF_SYSTEM_PROMPT } from '../handoff';
 import { BgTasks } from './bg-tasks';
 import { mapMessage } from './events';
 import { classifyHeuristic, CLASSIFY_SYSTEM_PROMPT, learnedRoute, learnRoute } from './routing';
@@ -11,6 +12,7 @@ import type { Classification, ClaudeRuntime, LiveSession, OpenOptions, SessionIn
 
 const PERMISSION_TIMEOUT_MS = 10 * 60_000;
 const CLASSIFY_TIMEOUT_MS = 15_000;
+const HANDOFF_TIMEOUT_MS = 30_000;
 
 type AttachBlock = { type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'; data: string } };
 const IMAGE_MIME: Record<string, 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
@@ -281,31 +283,42 @@ export class SdkRuntime implements ClaudeRuntime {
     return { model: r.model, source: 'haiku', costUsd: r.costUsd, durationMs: Date.now() - t0 };
   }
 
-  private async classifyViaHaiku(cwd: string, text: string): Promise<{ model: Model | null; costUsd?: number }> {
+  /** one throwaway Haiku turn (no session persisted, no settings, no tools); throws on failure or timeout */
+  private async haikuOnce(cwd: string, system: string, text: string, limit: number, timeoutMs: number): Promise<{ text: string; costUsd?: number }> {
     const input = channel<SDKUserMessage>();
     const q = query({
       prompt: input,
       options: {
         cwd, model: 'haiku', persistSession: false, maxTurns: 1,
-        systemPrompt: { type: 'custom', prompt: CLASSIFY_SYSTEM_PROMPT },
+        systemPrompt: { type: 'custom', prompt: system },
         settingSources: [],
         spawnClaudeCodeProcess: (so) => this.transport.spawn(so, () => {}),
       },
     });
-    input.push({ type: 'user', message: { role: 'user', content: text.slice(0, 2000) }, parent_tool_use_id: null });
+    input.push({ type: 'user', message: { role: 'user', content: text.slice(0, limit) }, parent_tool_use_id: null });
     input.end();
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const timeout = new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error('timeout ao classificar')), CLASSIFY_TIMEOUT_MS); });
-      const { text: answer, costUsd } = await Promise.race([classifierAnswer(q), timeout]);
-      if (!answer.trim()) return { model: null, costUsd };
-      return { model: /\bhaiku\b/i.test(answer) ? 'haiku' : 'sonnet', costUsd };
-    } catch {
-      return { model: null }; // failure: the caller falls back to Sonnet, never to the cheap model
+      const timeout = new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error('timeout')), timeoutMs); });
+      return await Promise.race([classifierAnswer(q), timeout]);
     } finally {
       clearTimeout(timer);
       q.close();
     }
+  }
+
+  private async classifyViaHaiku(cwd: string, text: string): Promise<{ model: Model | null; costUsd?: number }> {
+    try {
+      const { text: answer, costUsd } = await this.haikuOnce(cwd, CLASSIFY_SYSTEM_PROMPT, text, 2000, CLASSIFY_TIMEOUT_MS);
+      if (!answer.trim()) return { model: null, costUsd };
+      return { model: /\bhaiku\b/i.test(answer) ? 'haiku' : 'sonnet', costUsd };
+    } catch {
+      return { model: null }; // failure: the caller falls back to Sonnet, never to the cheap model
+    }
+  }
+
+  async handoffNotes(cwd: string, text: string): Promise<{ text: string; costUsd?: number }> {
+    return this.haikuOnce(cwd, HANDOFF_SYSTEM_PROMPT, text, 16_000, HANDOFF_TIMEOUT_MS);
   }
 
   // Sobe um processo sem enviar mensagem: o SDK responde a lista de comandos pelo canal de controle (sem custo de tokens).

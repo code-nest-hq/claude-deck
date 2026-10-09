@@ -6,6 +6,7 @@ import { IconLock, IconPencil, IconSend, IconShuffle } from '../../lib/icons';
 import { AskUserQuestionModal, isAskUserQuestion } from './AskUserQuestionModal';
 import { AttachMenu } from './AttachMenu';
 import { AutoCompactModal } from './AutoCompactModal';
+import { HandoffModal } from './HandoffModal';
 import { CommandsPanel } from './CommandsPanel';
 import { GitBar } from './GitBar';
 import { Markdown } from './Markdown';
@@ -146,6 +147,7 @@ export function Chat() {
   const [statusOpen, setStatusOpen] = useState(false);
   const [usageOpen, setUsageOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [handoffOpen, setHandoffOpen] = useState(false);
   const [bgOpen, setBgOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
@@ -310,7 +312,8 @@ export function Chat() {
       {mcpOpen && <McpModal it={chat.items.findLast((x) => x.kind === 'mcp')} onClose={() => setMcpOpen(false)} />}
       {usageOpen && <UsageModal chat={chat} onClose={() => setUsageOpen(false)} />}
       {statusOpen && project && <StatusModal sessionId={active.sessionId} name={name} project={project} config={config} chat={chat} onClose={() => setStatusOpen(false)} />}
-      <AutoCompactModal key={active.sessionId} sessionId={active.sessionId} chat={chat} enabled={!!project?.autoCompact} onCompact={() => send('/compact', false, 'auto-compact')} onDecline={compactDeclined} />
+      <AutoCompactModal key={active.sessionId} sessionId={active.sessionId} chat={chat} enabled={!!project?.autoCompact} onCompact={() => send('/compact', false, 'auto-compact')} onDecline={compactDeclined} onHandoff={() => setHandoffOpen(true)} />
+      {handoffOpen && <HandoffModal projectId={active.projectId} sessionId={active.sessionId} name={name} onClose={() => setHandoffOpen(false)} />}
 
       <div className="relative border-t border-zinc-800/70 bg-zinc-950 p-3">
         {menuOpen && <SlashMenu items={matches} sel={Math.min(sel, matches.length - 1)} lean={!!project?.lean} onPick={pick} onHover={setSel} />}

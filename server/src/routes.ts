@@ -4,12 +4,13 @@ import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import {
   createConnectionBody, createProfileBody, createProjectBody, createSessionBody, lastConnectionBody, loginCodeBody, patchConfigBody, patchProjectBody, patchSessionBody, uuidSchema,
-  findLines, type Connection, type HistoryItem, type Project, type ProjectHit, type SessionMeta, type SessionStatus, type SlashCommandInfo,
+  findLines, type Connection, type HandoffResult, type HistoryItem, type Project, type ProjectHit, type SessionMeta, type SessionStatus, type SlashCommandInfo,
 } from '@ccui/shared';
 import { versionWarning, type Connections } from './connections';
 import { ensureMeta, listProjectSessions, openSpecFor } from './domain';
 import { buildExport } from './export';
 import { parseGitStatus } from './git';
+import { buildHandoff } from './handoff';
 import { parseHistory } from './runtime/jsonl';
 import { logDay, logDays, readLogs } from './logs';
 import { activate, DEFAULT_PROFILE, knownProfile, listProfiles, logout, removeProfile, sendCode, startLogin, usageFor } from './profiles';
@@ -264,6 +265,25 @@ export function buildApi({ store, hub, conns }: Deps) {
       'Content-Type': 'application/x-ndjson; charset=utf-8',
       'Content-Disposition': `attachment; filename="${slug}-${meta.sessionId.slice(0, 8)}-${logDay()}.jsonl"`,
     });
+  });
+
+  // "new session with handoff": prompt built locally from the transcript; ?enrich=1 adds a Haiku-distilled decisions/pending section
+  api.get('/projects/:id/sessions/:sid/handoff', async (c) => {
+    const sid = uuidSchema.safeParse(c.req.param('sid'));
+    const p = project(c.req.param('id'));
+    const meta = sid.success ? store.sessions.data.sessions.find((s) => s.sessionId === sid.data && s.projectId === c.req.param('id')) : undefined;
+    if (!p || !meta) return c.json({ error: 'projeto/sessão desconhecido' }, 404);
+    const { transport, runtime } = conns.get(p.connectionId);
+    const { cwd } = openSpecFor(store, meta.sessionId);
+    const transcript = await transport.readTranscript(meta.sessionId, cwd).catch(() => null);
+    if (!transcript) return c.json({ error: 'transcrição da sessão não encontrada' }, 404);
+    const h = buildHandoff(transcript.main);
+    if (c.req.query('enrich') !== '1') return c.json({ text: h.text } satisfies HandoffResult);
+    try {
+      const n = await runtime.handoffNotes(cwd, `${h.text}\n\n## Recent assistant messages\n${h.recent}`);
+      const notes = n.text.trim();
+      return c.json({ text: notes ? `${h.text}\n\n## Decisions and pending (distilled by Haiku)\n${notes}` : h.text, enriched: !!notes, costUsd: n.costUsd } satisfies HandoffResult);
+    } catch (e) { return c.json({ text: h.text, enriched: false, error: (e as Error).message } satisfies HandoffResult); }
   });
 
   // background tasks modal: output tail and stop (the list itself comes over the WebSocket: bg.tasks / snapshot)

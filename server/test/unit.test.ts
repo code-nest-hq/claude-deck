@@ -22,6 +22,7 @@ const { parseHistory, jsonlTimestamps, parseRemoteTranscript, FILE_MARK } = awai
 const { recordSession, readSessionLog, flushSessionLog } = await import('../src/session-log');
 const { redactString, redactDeep } = await import('../src/redact');
 const { buildExport } = await import('../src/export');
+const { buildHandoff } = await import('../src/handoff');
 
 const spec = { cwd: '/tmp/project', model: 'sonnet' as Model, effort: 'medium' as const, lean: true, routing: true, permissionMode: 'default' as const };
 const label = () => ({ projectId: 'p1', projectName: 'Test project', sessionName: 'test session' });
@@ -486,5 +487,40 @@ describe('findLines (text search)', () => {
     const [h] = findLines(`${'a'.repeat(300)} NEEDLE ${'b'.repeat(300)}`, 'needle');
     assert.equal(h.match, 'NEEDLE');
     assert.ok(h.pre.startsWith('…') && h.post.endsWith('…') && h.pre.length + h.post.length < 200);
+  });
+});
+
+describe('session handoff', () => {
+  const line = (o: Record<string, unknown>) => JSON.stringify(o);
+  const jsonl = [
+    line({ type: 'user', message: { content: 'Build the export button' } }),
+    line({ type: 'user', isMeta: true, message: { content: 'injected skill text' } }),
+    line({ type: 'user', message: { content: '<command-name>/compact</command-name>' } }),
+    line({ type: 'assistant', message: { content: [
+      { type: 'text', text: 'Plan: edit the modal.' },
+      { type: 'tool_use', name: 'Edit', input: { file_path: '/p/a.ts' } },
+      { type: 'tool_use', name: 'Edit', input: { file_path: '/p/a.ts' } },
+      { type: 'tool_use', name: 'Bash', input: { command: 'git commit -m "feat: x"' } },
+      { type: 'tool_use', name: 'TodoWrite', input: { todos: [{ status: 'completed', content: 'done one' }, { status: 'pending', content: 'write docs' }] } },
+    ] } }),
+    line({ type: 'user', sourceToolUseID: 't1', message: { content: 'tool output, not a request' } }),
+    line({ type: 'user', message: { content: 'now add tests' } }),
+    line({ type: 'assistant', message: { content: [{ type: 'text', text: 'Tests added; docs are next.' }] } }),
+  ].join('\n');
+
+  test('extracts goal, requests, files, commits, open todos and the last message', () => {
+    const { text, recent } = buildHandoff(jsonl);
+    assert.match(text, /## Original goal\nBuild the export button/);
+    assert.match(text, /- now add tests/);
+    assert.doesNotMatch(text, /injected skill text|tool output|command-name/);
+    assert.equal(text.match(/- \/p\/a\.ts/g)?.length, 1);
+    assert.match(text, /git commit -m "feat: x"/);
+    assert.match(text, /\[pending\] write docs/);
+    assert.doesNotMatch(text, /done one/);
+    assert.match(text, /Tests added; docs are next\.$/);
+    assert.match(recent, /Plan: edit the modal\./);
+  });
+  test('empty transcript still yields a usable prompt', () => {
+    assert.match(buildHandoff('').text, /## Original goal\n\(none\)/);
   });
 });

@@ -38,6 +38,8 @@ export interface SessionStatus {
   meta: SessionMeta; live: boolean;
   model: Model; effort: Effort; routing: boolean; lean: boolean; permissionMode: 'default' | 'plan' | 'bypassPermissions';
 }
+/** `GET .../handoff`: the prompt for a fresh session that continues this one; `enriched` only when ?enrich=1 and the Haiku call worked */
+export interface HandoffResult { text: string; enriched?: boolean; costUsd?: number; error?: string }
 export interface SessionRow { sessionId: string; name: string; lastModified: number; live: boolean; tags: string[]; favorite: boolean; archived: boolean }
 export interface SlashCommandInfo { name: string; description: string; argumentHint: string; aliases?: string[]; builtin: boolean }
 export interface GitInfo { branch: string | null; ahead: number; behind: number; changed: number; untracked: number }
