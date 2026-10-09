@@ -13,6 +13,7 @@ Node.js + Hono + WebSocket. No Controller/Service/Repository — modules are fil
 - `routes.ts` — REST API: `/api/state`, `/api/config`, `/api/connections` (+ `/test`, `/:id/browse` folder browser), `/api/projects` (+ `/:id/sessions`, `/:id/commands`, `/:id/git`, `/:id/sessions/:sid/status|export|reload|bg/...`), `/api/sessions/:id`, `/api/profiles` (+ `/:id/activate|login|login/code|logout`, `GET /:id/usage`, `DELETE /:id`).
 - `session-log.ts` — per-session Deck-side log: `recordSession` appends one JSON line to `<data dir>/session-logs/<sessionId>.jsonl` (same serialized append chain as `logs.ts`; never throws), `readSessionLog`, `flushSessionLog`.
 - `export.ts` — `buildExport()`: the session export (see `docs/architecture.md` §Session export). Pure function; `routes.ts` does the IO.
+- `handoff.ts` — `buildHandoff()`: the "new session with handoff" prompt (goal, follow-up requests, files modified, commits, open todos, last assistant message) built from the transcript with no model call; `HANDOFF_SYSTEM_PROMPT` is the opt-in Haiku distillation (`ClaudeRuntime.handoffNotes`, `GET /api/projects/:id/sessions/:sid/handoff?enrich=1`).
 - `redact.ts` — `redactString`/`redactDeep`: best-effort secret masking used by the export.
 - `security.ts` — `guard` (token/host check), `makeToken`.
 - `ssh-util.ts` — SSH helpers: `claudeExpr`, `encodeCwd`, `explainSshError`, `runSsh`, `shq` (shell-quote), `sshArgv`, `SESSION_ID_RE`.

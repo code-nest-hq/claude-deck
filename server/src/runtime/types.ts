@@ -63,6 +63,8 @@ export interface ClaudeRuntime {
   mcp(cwd: string, lean: boolean, action?: McpAction): Promise<{ servers: McpServerView[]; error?: string }>;
   /** decide Haiku ou Sonnet pra uma mensagem (heurística + fallback Haiku descartável) */
   classify(cwd: string, text: string): Promise<Classification>;
+  /** one throwaway Haiku call that distills decisions/pending work out of a handoff text; throws on failure */
+  handoffNotes(cwd: string, text: string): Promise<{ text: string; costUsd?: number }>;
   /** após uma queda: espera o claude da sessão terminar (não lança) */
   settle(sessionId: string, cwd: string): Promise<void>;
 }

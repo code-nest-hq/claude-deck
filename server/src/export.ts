@@ -21,7 +21,7 @@ const IN_TRANSCRIPT = new Set(['user.message', 'message.completed', 'tool.starte
 // per-line envelope noise of a transcript entry (the manifest/timeline carry what matters)
 const ENVELOPE = ['parentUuid', 'logicalParentUuid', 'isSidechain', 'userType', 'entrypoint', 'cwd', 'version', 'gitBranch', 'sessionId', 'requestId', 'slug'];
 
-interface Entry {
+export interface Entry {
   type?: string; subtype?: string; timestamp?: string; uuid?: string; isMeta?: boolean; sourceToolUseID?: string; durationMs?: number;
   message?: { id?: string; model?: string; content?: unknown; usage?: Usage };
   attachment?: Record<string, unknown>; content?: unknown; compactMetadata?: Record<string, unknown>;
@@ -66,7 +66,7 @@ function toolOrigin(name: string, input: unknown): string {
   return `tool:${name}`;
 }
 
-const parse = (text: string): Entry[] => text.split('\n').flatMap((l) => { try { return l ? [JSON.parse(l) as Entry] : []; } catch { return []; } });
+export const parse = (text: string): Entry[] => text.split('\n').flatMap((l) => { try { return l ? [JSON.parse(l) as Entry] : []; } catch { return []; } });
 
 export function buildExport(input: ExportInput): string {
   const counts: RedactionCounts = {};
