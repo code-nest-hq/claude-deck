@@ -3,6 +3,7 @@ import { EFFORTS, MODELS, type Effort, type Model } from '@ccui/shared';
 import { api } from '../api';
 import { useApp } from '../store';
 import { ServerForm } from '../features/connect/ServerForm';
+import { DEFAULT_PASTE_LINES, pasteThreshold, setPasteThreshold } from '../features/chat/pasted';
 
 const field = 'w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-200 outline-none focus:border-zinc-700';
 const section = 'mb-1.5 font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-500';
@@ -15,6 +16,7 @@ export function AppSettingsModal({ onClose }: { onClose: () => void }) {
   const d = config?.defaults;
   const [addingServer, setAddingServer] = useState(false);
   const [err, setErr] = useState('');
+  const [pasteLines, setPasteLines] = useState(pasteThreshold);
 
   const patch = async (b: Partial<{ model: Model; effort: Effort }>) => {
     try { await api.patchConfig(b); await reloadProjects(); setErr(''); } catch (e) { setErr((e as Error).message); }
@@ -42,6 +44,14 @@ export function AppSettingsModal({ onClose }: { onClose: () => void }) {
             </label>
           </div>
           {err && <div className="text-xs text-rose-400">{err}</div>}
+        </div>
+
+        <div className="mt-5 border-t border-zinc-800/70 pt-4">
+          <div className={section}>Texto colado</div>
+          <label className="block text-xs text-zinc-400">Colagens com pelo menos N linhas viram um anexo (padrão {DEFAULT_PASTE_LINES})
+            <input type="number" min={2} className={`${field} mt-1 w-28`} value={pasteLines}
+              onChange={(e) => { const n = Math.max(2, Math.floor(Number(e.target.value)) || DEFAULT_PASTE_LINES); setPasteLines(n); setPasteThreshold(n); }} />
+          </label>
         </div>
 
         <div className="mt-5 border-t border-zinc-800/70 pt-4">

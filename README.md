@@ -129,5 +129,6 @@ No automated test suite by project choice (see [`docs/testing.md`](docs/testing.
 | v1.8.0 | MCP modal (header **MCP** button or `/mcp`) to inspect servers and enable/disable/reconnect them, email-style rich input (pencil icon: bold, italic, lists, code; Ctrl+Enter or Send button, sent as markdown) |
 | v1.9.0 | Structured findings: a trailing JSON array in skill output (e.g. `/code-review`) renders as a findings list instead of a raw code block |
 | v1.10.0 | New session with handoff: third option of the auto-compact prompt opens a clean session seeded with a locally built summary of the old one (goal, requests, files, commits, todos, last message), optionally enriched by Haiku |
+| v1.11.0 | Large pastes (default 600+ lines, global setting) become an inline `[Pasted text #N +L lines]` attachment; click to view/edit in a large modal before sending, or view read-only in the conversation |
 
 The design and decision history for each feature is in `docs/superpowers/{specs,plans}/`.
