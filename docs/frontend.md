@@ -74,3 +74,7 @@ Main actions: `open()`, `closeTab()`, `send()` (includes the session's staged at
 ## Global shortcuts
 
 Defined in `app/App.tsx`: Ctrl/Cmd+K (palette), Alt+N (new session), Alt+L (sidebar), Alt+Up/Down (switch tab), Ctrl+J (terminal), `?` (help), Esc (close modal). Full, up-to-date list in `features/sessions/Shortcuts.tsx`.
+
+## Pasted text attachments
+
+Plain-mode input only. A paste of >= N lines (global setting, `localStorage` key `ccui.pasteLines`, default 600, edited in App Settings) becomes an inline `[Pasted text #id +N lines]` token; the text lives in `Chat` state. Clicking the token in the input opens `PastedModal` editable (Save / Ctrl+Enter updates text and line count). On submit each token is expanded into `<pasted-text id="N">…</pasted-text>`, so the sent bubble (also after reload) renders it as a `PastedChip` that opens the modal read-only. Shell `!cmd` inlines the raw text. Helpers in `web/src/features/chat/pasted.ts`.

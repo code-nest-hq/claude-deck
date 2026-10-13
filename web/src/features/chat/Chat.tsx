@@ -12,6 +12,8 @@ import { GitBar } from './GitBar';
 import { Markdown } from './Markdown';
 import type { Item, SkillUse } from './reduce';
 import { McpModal } from './McpModal';
+import { PastedChip, PastedModal } from './PastedModal';
+import { expandPastes, hasPasted, lineCount, splitPasted, pasteThreshold, pasteToken, TOKEN_SPLIT_RE, tokenAt } from './pasted';
 import { RichEditor } from './RichEditor';
 import { matchCommands, SlashMenu } from './SlashMenu';
 import { ShellCard } from './ShellCard';
@@ -46,7 +48,9 @@ function ErrorItem({ text, errorId }: { text: string; errorId?: string }) {
 function ItemView({ it, busy, bypass, commands }: { it: Item; busy: boolean; bypass: boolean; commands?: SlashCommandInfo[] }) {
   // mensagens do modo shell/comandos vindas do terminal chegam como blocos de código: renderiza como markdown
   if (it.kind === 'user') {
-    const bubble = it.text.includes('```')
+    const bubble = hasPasted(it.text)
+      ? <div className="ml-auto max-w-[80%] whitespace-pre-wrap rounded-lg border border-zinc-800 bg-zinc-900 px-3.5 py-2 text-sm text-zinc-100 shadow-sm">{splitPasted(it.text).map((p, i) => typeof p === 'string' ? p : <PastedChip key={i} id={p.id} text={p.text} />)}</div>
+      : it.text.includes('```')
       ? <div className="ml-auto max-w-[80%] rounded-lg border border-zinc-800 bg-zinc-900 px-3.5 py-2 text-sm text-zinc-100 shadow-sm"><Markdown text={it.text} /></div>
       : <div className="ml-auto max-w-[80%] whitespace-pre-wrap rounded-lg border border-zinc-800 bg-zinc-900 px-3.5 py-2 text-sm text-zinc-100 shadow-sm">{it.text}</div>;
     if (!it.routedModel) return bubble;
@@ -153,6 +157,8 @@ export function Chat() {
   const [mcpOpen, setMcpOpen] = useState(false);
   const [rich, setRich] = useState(false); // email-style input (pencil): Enter breaks line, Ctrl+Enter sends markdown
   const [richMd, setRichMd] = useState('');
+  const [pastes, setPastes] = useState<Record<number, string>>({}); // id -> text behind each "[Pasted text #id +N lines]" token
+  const [pastedOpen, setPastedOpen] = useState<number>();
   const [richKey, setRichKey] = useState(0); // remount = clear the editor
   const [stampsOff, setStampsOff] = useState<Record<string, boolean>>({}); // per session; timestamps are on by default
   const end = useRef<HTMLDivElement>(null);
@@ -173,7 +179,11 @@ export function Chat() {
   const slash = /^\/(\S+)(\s|$)/.exec(text);
   const slashKnown = slash && commands && (slash[2] || !menuOpen) ? commands.some((c) => c.name === slash[1]) : undefined;
   const bang = text.startsWith('!');
-  const mirrored = bang || (!!slash && slashKnown !== undefined);
+  const hasToken = text.includes('[Pasted text #') && TOKEN_SPLIT_RE.test(text);
+  const mirrored = bang || (!!slash && slashKnown !== undefined) || hasToken;
+  // pasted-text tokens get a chip-like background in the mirror
+  const withTokens = (s: string) => s.split(TOKEN_SPLIT_RE).map((part, i) =>
+    i % 2 ? <span key={i} className="rounded-sm bg-sky-500/25 text-sky-200 [box-decoration-break:clone]">{part}</span> : part);
 
   if (!active || !chat) return <div className="flex flex-1 items-center justify-center text-zinc-500">Selecione ou crie uma sessão (Ctrl+K)</div>;
 
@@ -189,14 +199,35 @@ export function Chat() {
   const allTokens = t.input + t.output + t.cacheCreation + t.cacheRead;
   const openMcp = () => { setMcpOpen(true); mcp(); };
   const submit = () => {
-    const t = (rich ? richMd : text).trim();
+    const raw = rich ? richMd : text;
+    const t = expandPastes(raw, pastes, !raw.trim().startsWith('!')).trim();
     if (!t || !up) return;
     if (rich) { if (!busy) { send(t); setRichMd(''); setRichKey((k) => k + 1); } return; } // no "/" or "!" handling here: plain mode only
     // modo shell: "!comando" roda direto no diretório do projeto (não vai ao modelo)
-    if (t.startsWith('!')) { const cmd = t.slice(1).trim(); if (cmd) { shell(cmd); setText(''); } return; }
+    if (t.startsWith('!')) { const cmd = t.slice(1).trim(); if (cmd) { shell(cmd); setText(''); setPastes({}); } return; }
     // /mcp: interactive modal like the terminal's panel, instead of the CLI's one-line text summary (not sent to the model)
     if (t === '/mcp') { openMcp(); setText(''); return; }
-    if (!busy) { send(t); setText(''); }
+    if (!busy) { send(t); setText(''); setPastes({}); }
+  };
+  const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const pasted = e.clipboardData.getData('text');
+    const lines = lineCount(pasted);
+    if (lines < pasteThreshold()) return;
+    e.preventDefault();
+    const el = e.currentTarget;
+    const id = Math.max(0, ...Object.keys(pastes).map(Number)) + 1;
+    const tok = pasteToken(id, lines);
+    const [a, b] = [el.selectionStart, el.selectionEnd];
+    setPastes((p) => ({ ...p, [id]: pasted }));
+    setText(text.slice(0, a) + tok + text.slice(b));
+    setTimeout(() => el.setSelectionRange(a + tok.length, a + tok.length), 0);
+  };
+  // edited in the modal: refresh the stored text and the "+N lines" in the token (empty = drop the paste)
+  const savePaste = (id: number, v: string) => {
+    const re = new RegExp(`\\[Pasted text #${id} \\+\\d+ lines\\]`);
+    if (v === '') { setPastes(({ [id]: _, ...rest }) => rest); setText((t) => t.replace(re, '')); return; }
+    setPastes((p) => ({ ...p, [id]: v }));
+    setText((t) => t.replace(re, pasteToken(id, lineCount(v))));
   };
   const pick = (c: SlashCommandInfo) => { setText(`/${c.name} `); setSel(0); input.current?.focus(); };
 
@@ -309,6 +340,7 @@ export function Chat() {
       {bgOpen && <BgTasksModal projectId={active.projectId} sessionId={active.sessionId} chat={chat} onClose={() => setBgOpen(false)} />}
       {exportOpen && <ExportModal projectId={active.projectId} sessionId={active.sessionId} onClose={() => setExportOpen(false)} />}
       {searchOpen && <SearchModal placeholder="Pesquisar nesta sessão…" search={sessionSearch(chat.items, jumpTo)} onClose={() => setSearchOpen(false)} />}
+      {pastedOpen !== undefined && pastes[pastedOpen] !== undefined && <PastedModal id={pastedOpen} text={pastes[pastedOpen]} onClose={() => setPastedOpen(undefined)} onSave={(v) => savePaste(pastedOpen, v)} />}
       {mcpOpen && <McpModal it={chat.items.findLast((x) => x.kind === 'mcp')} onClose={() => setMcpOpen(false)} />}
       {usageOpen && <UsageModal chat={chat} onClose={() => setUsageOpen(false)} />}
       {statusOpen && project && <StatusModal sessionId={active.sessionId} name={name} project={project} config={config} chat={chat} onClose={() => setStatusOpen(false)} />}
@@ -326,7 +358,9 @@ export function Chat() {
               <div ref={mirror} aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words p-3 text-sm text-zinc-100 [scrollbar-gutter:stable]">
                 {bang
                   ? <><span className="text-red-500">!</span><span className="rounded-sm bg-zinc-300 text-zinc-900 [box-decoration-break:clone]">{text.slice(1)}</span>{' '}</>
-                  : slash && <><span className={`underline underline-offset-2 ${slashKnown ? 'text-sky-400' : 'text-red-400'}`}>/{slash[1]}</span>{text.slice(slash[1].length + 1)}{' '}</>}
+                  : slash && slashKnown !== undefined
+                    ? <><span className={`underline underline-offset-2 ${slashKnown ? 'text-sky-400' : 'text-red-400'}`}>/{slash[1]}</span>{withTokens(text.slice(slash[1].length + 1))}{' '}</>
+                    : <>{withTokens(text)}{' '}</>}
               </div>
             )}
             <textarea
@@ -338,6 +372,8 @@ export function Chat() {
               onChange={(e) => { setText(e.target.value); setSel(0); setDismissed(false); }}
               onScroll={(e) => { if (mirror.current) mirror.current.scrollTop = e.currentTarget.scrollTop; }}
               onKeyDown={onKeyDown}
+              onPaste={onPaste}
+              onClick={(e) => { const el = e.currentTarget; if (el.selectionStart === el.selectionEnd) { const id = tokenAt(text, el.selectionStart); if (id !== undefined && pastes[id] !== undefined) setPastedOpen(id); } }}
             />
           </div>
           )}
