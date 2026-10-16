@@ -23,6 +23,7 @@ const { recordSession, readSessionLog, flushSessionLog } = await import('../src/
 const { redactString, redactDeep } = await import('../src/redact');
 const { buildExport } = await import('../src/export');
 const { buildHandoff } = await import('../src/handoff');
+const { ROUTING_AGENTS, forbiddenModel } = await import('../src/runtime/sdk-runtime');
 
 const spec = { cwd: '/tmp/project', model: 'sonnet' as Model, effort: 'medium' as const, lean: true, routing: true, permissionMode: 'default' as const };
 const label = () => ({ projectId: 'p1', projectName: 'Test project', sessionName: 'test session' });
@@ -522,5 +523,14 @@ describe('session handoff', () => {
   });
   test('empty transcript still yields a usable prompt', () => {
     assert.match(buildHandoff('').text, /## Original goal\n\(none\)/);
+  });
+});
+
+describe('routing subagents', () => {
+  test('every routing agent is pinned to Haiku', () => {
+    for (const a of Object.values(ROUTING_AGENTS)) {
+      assert.equal(a.model, 'haiku');
+      assert.ok(!forbiddenModel(a.model));
+    }
   });
 });

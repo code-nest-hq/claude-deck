@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { createSdkMcpServer, query, tool, type CanUseTool, type McpServerStatus, type PermissionResult, type Query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import { createSdkMcpServer, query, tool, type AgentDefinition, type CanUseTool, type McpServerStatus, type PermissionResult, type Query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { EFFORTS, MODELS, type EventBody, type HistoryItem, type McpAction, type McpServerView, type Model, type ModelUsage, type PlanUsage, type ShellResult, type SlashCommandInfo, type UsageTotals } from '@ccui/shared';
 import { z } from 'zod';
 import { visibleCommands } from '../commands';
@@ -94,6 +94,16 @@ async function mcpStatus(q: Query, action?: McpAction): Promise<{ servers: McpSe
 
 export const forbiddenModel = (m?: string) => !!m && /opus|fable/i.test(m);
 
+// Model Routing: read-only exploration runs on Haiku even when the main turn is Sonnet (the SDK can't switch model per tool call)
+export const ROUTING_AGENTS: Record<string, AgentDefinition> = {
+  'haiku-explorer': {
+    description: 'Read-only exploration: find where something is defined or used, read several files and report what matters. Use it instead of reading many files yourself.',
+    prompt: 'You explore code, read-only. Never edit files or run commands that change anything. Answer concisely with file:line references and only the facts asked for.',
+    tools: ['Read', 'Grep', 'Glob', 'Bash'],
+    model: 'haiku',
+  },
+};
+
 class Live implements LiveSession {
   private input = channel<SDKUserMessage>();
   private out = channel<EventBody>();
@@ -149,12 +159,12 @@ class Live implements LiveSession {
         permissionMode: o.permissionMode,
         allowDangerouslySkipPermissions: o.permissionMode === 'bypassPermissions',
         systemPrompt: o.routing
-          ? { type: 'preset', preset: 'claude_code', append: 'Este projeto usa roteamento de modelo pra economizar tokens: se você estiver rodando em Haiku e perceber que a tarefa precisa de mais raciocínio (mudanças em vários arquivos, arquitetura, lógica complexa), chame a ferramenta request_model_upgrade explicando o motivo antes de continuar.' }
+          ? { type: 'preset', preset: 'claude_code', append: 'Este projeto usa roteamento de modelo pra economizar tokens: se você estiver rodando em Haiku e perceber que a tarefa precisa de mais raciocínio (mudanças em vários arquivos, arquitetura, lógica complexa), chame a ferramenta request_model_upgrade explicando o motivo antes de continuar. Pra explorar código (achar onde algo é definido/usado, ler vários arquivos), delegue ao subagent haiku-explorer em vez de ler tudo você mesmo.' }
           : { type: 'preset', preset: 'claude_code' },
         settingSources: o.lean ? [] : ['user', 'project', 'local'],
         includePartialMessages: true,
         canUseTool: this.canUseTool,
-        ...(routingServer ? { mcpServers: { routing: routingServer } } : {}),
+        ...(routingServer ? { mcpServers: { routing: routingServer }, agents: ROUTING_AGENTS } : {}),
         spawnClaudeCodeProcess: (so) => transport.spawn(so, (s) => { this.stderrTail = (this.stderrTail + s).slice(-2000); }),
       },
     });
