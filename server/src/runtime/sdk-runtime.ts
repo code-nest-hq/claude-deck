@@ -182,7 +182,7 @@ class Live implements LiveSession {
         'Pede pra trocar de Haiku pra Sonnet 5 no meio da tarefa, quando ela precisar de mais raciocínio do que o esperado.',
         { reason: z.string().min(1).max(300) },
         async ({ reason }) => {
-          await this.q.setModel('sonnet'); // só roda depois que canUseTool já aprovou a chamada desta tool
+          await this.q.setModel('sonnet'); // com permissões normais só roda depois que canUseTool aprovou; em bypassPermissions o SDK pula o gate (opt-in do projeto)
           return { content: [{ type: 'text', text: `Modelo trocado pra Sonnet 5. Motivo: ${reason}` }] };
         },
       )],

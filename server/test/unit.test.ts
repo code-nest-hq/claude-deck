@@ -182,6 +182,31 @@ describe('SessionHub send (fake runtime)', () => {
   });
 });
 
+describe('SessionHub permissions', () => {
+  test('only an attached client can answer a prompt', async () => {
+    const rt = fakeRuntime();
+    const h = hubWith(rt);
+    await h.attach();
+    await h.hub.send(h.id, 'hi');
+    h.hub.answerPermission({ send() {}, sessions: new Set() }, h.id, 'r1', true);
+    assert.deepEqual(rt.lives[0].answers, []);
+    h.hub.answerPermission(h.client, h.id, 'r2', false);
+    assert.deepEqual(rt.lives[0].answers, [{ reqId: 'r2', allow: false }]);
+  });
+  test('closeLive ends the process and the next send reopens it', async () => {
+    const rt = fakeRuntime();
+    const h = hubWith(rt);
+    await h.attach();
+    await h.hub.send(h.id, 'one');
+    await h.waitFor((e) => e.type === 'turn.completed');
+    h.hub.closeLive(h.id);
+    await h.waitFor((e) => e.type === 'session.state' && e.state === 'exited');
+    assert.ok(rt.lives[0].closed);
+    await h.hub.send(h.id, 'two');
+    assert.equal(rt.lives.length, 2);
+  });
+});
+
 describe('error log', () => {
   test('a session error gets an errorId and one entry in today\'s file, with project and recent events', async () => {
     const rt = fakeRuntime({ onSend: (_t, l: FakeLive) => l.out.push({ type: 'error', code: 'runtime', message: 'boom' }) });

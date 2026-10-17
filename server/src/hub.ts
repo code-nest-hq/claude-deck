@@ -253,8 +253,15 @@ export class SessionHub {
     recordSession(id, 'compact.declined', { percentage });
   }
 
-  answerPermission(id: string, reqId: string, allow: boolean, updatedInput?: Record<string, unknown>) {
+  /** only a client attached to the session may answer its prompts */
+  answerPermission(c: Client, id: string, reqId: string, allow: boolean, updatedInput?: Record<string, unknown>) {
+    if (!c.sessions.has(id)) return;
     this.entries.get(id)?.live?.answerPermission(reqId, allow, updatedInput);
+  }
+
+  /** ends the live process (the session stays resumable); the next send reopens it with the current spec */
+  closeLive(id: string) {
+    void this.entries.get(id)?.live?.close();
   }
 
   async shutdown() {
