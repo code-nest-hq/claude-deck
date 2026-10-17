@@ -12,6 +12,7 @@ import { GitBar } from './GitBar';
 import { Markdown } from './Markdown';
 import type { Item, SkillUse } from './reduce';
 import { McpModal } from './McpModal';
+import { PluginsModal } from './PluginsModal';
 import { PastedChip, PastedModal } from './PastedModal';
 import { expandPastes, hasPasted, lineCount, splitPasted, pasteThreshold, pasteToken, TOKEN_SPLIT_RE, tokenAt } from './pasted';
 import { RichEditor } from './RichEditor';
@@ -155,6 +156,7 @@ export function Chat() {
   const [bgOpen, setBgOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
+  const [pluginsOpen, setPluginsOpen] = useState(false);
   const [rich, setRich] = useState(false); // email-style input (pencil): Enter breaks line, Ctrl+Enter sends markdown
   const [richMd, setRichMd] = useState('');
   const [pastes, setPastes] = useState<Record<number, string>>({}); // id -> text behind each "[Pasted text #id +N lines]" token
@@ -207,6 +209,7 @@ export function Chat() {
     if (t.startsWith('!')) { const cmd = t.slice(1).trim(); if (cmd) { shell(cmd); setText(''); setPastes({}); } return; }
     // /mcp: interactive modal like the terminal's panel, instead of the CLI's one-line text summary (not sent to the model)
     if (t === '/mcp') { openMcp(); setText(''); return; }
+    if (t === '/plugin' || t === '/plugins') { setPluginsOpen(true); setText(''); return; }
     if (!busy) { send(t); setText(''); setPastes({}); }
   };
   const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
@@ -271,6 +274,7 @@ export function Chat() {
           </button>
           <button className="rounded-md border border-zinc-800 px-2.5 py-1 text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-900" title="Pesquisar texto nesta sessão" onClick={() => setSearchOpen(true)}>Pesquisar</button>
           <button className="rounded-md border border-zinc-800 px-2.5 py-1 text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-900" title="Servidores MCP: status, enable/disable, reconnect" onClick={openMcp}>MCP</button>
+          {project && <button className="rounded-md border border-zinc-800 px-2.5 py-1 text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-900" title="Plugins: install, enable/disable, update, marketplaces" onClick={() => setPluginsOpen(true)}>Plugins</button>}
           {chat.bgTasks.length > 0 && (() => {
             const running = chat.bgTasks.filter((t) => t.status === 'running').length;
             return (
@@ -343,6 +347,7 @@ export function Chat() {
       {exportOpen && <ExportModal projectId={active.projectId} sessionId={active.sessionId} onClose={() => setExportOpen(false)} />}
       {searchOpen && <SearchModal placeholder="Pesquisar nesta sessão…" search={sessionSearch(chat.items, jumpTo)} onClose={() => setSearchOpen(false)} />}
       {pastedOpen !== undefined && pastes[pastedOpen] !== undefined && <PastedModal id={pastedOpen} text={pastes[pastedOpen]} onClose={() => setPastedOpen(undefined)} onSave={(v) => savePaste(pastedOpen, v)} />}
+      {pluginsOpen && project && <PluginsModal projectId={project.id} onClose={() => setPluginsOpen(false)} />}
       {mcpOpen && <McpModal it={chat.items.findLast((x) => x.kind === 'mcp')} onClose={() => setMcpOpen(false)} />}
       {usageOpen && <UsageModal chat={chat} onClose={() => setUsageOpen(false)} />}
       {statusOpen && project && <StatusModal sessionId={active.sessionId} name={name} project={project} config={config} chat={chat} onClose={() => setStatusOpen(false)} />}

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, test } from 'node:test';
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
-import type { Model } from '@ccui/shared';
+import { pluginActionSchema, type Model } from '@ccui/shared';
 import { fakeRuntime, recorder, type FakeLive } from './fakes';
 
 // isolated data dir BEFORE loading anything that reads it (store.ts / logs.ts)
@@ -23,6 +23,7 @@ const { recordSession, readSessionLog, flushSessionLog } = await import('../src/
 const { redactString, redactDeep } = await import('../src/redact');
 const { buildExport } = await import('../src/export');
 const { buildHandoff } = await import('../src/handoff');
+const { loadPlugins, pluginArgs } = await import('../src/plugins');
 const { ROUTING_AGENTS, forbiddenModel, opusGate, OPUS_AGENT, SONNET_AGENT } = await import('../src/runtime/sdk-runtime');
 
 const spec = { cwd: '/tmp/project', model: 'sonnet' as Model, effort: 'medium' as const, lean: true, routing: true, permissionMode: 'default' as const };
@@ -568,5 +569,32 @@ describe('routing subagents', () => {
     let asked = false;
     assert.deepEqual(await opusGate({ subagent_type: 'haiku-explorer' }, async () => (asked = true)), {});
     assert.equal(asked, false);
+  });
+});
+
+describe('plugins panel', () => {
+  test('actions are validated and shell-quoted; option/injection payloads are rejected', () => {
+    const ok = (x: unknown) => pluginActionSchema.parse(x);
+    assert.equal(pluginArgs(ok({ kind: 'install', plugin: 'a@b', scope: 'project' })), "plugin install --scope project -- 'a@b'");
+    assert.equal(pluginArgs(ok({ kind: 'marketplace.update' })), 'plugin marketplace update');
+    assert.equal(pluginArgs(ok({ kind: 'marketplace.add', source: 'owner/repo' })), "plugin marketplace add -- 'owner/repo'");
+    for (const bad of [{ kind: 'install', plugin: '--force' }, { kind: 'install', plugin: 'a; rm -rf ~' }, { kind: 'enable', plugin: 'a', scope: 'root' }, { kind: 'marketplace.add', source: '-x' }, { kind: 'marketplace.add', source: 'a b' }, { kind: 'nope' }]) {
+      assert.equal(pluginActionSchema.safeParse(bad).success, false, JSON.stringify(bad));
+    }
+  });
+
+  test('loadPlugins merges the CLI lists with the marketplace catalog and hides installed plugins from "available"', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'ccui-mk-'));
+    mkdirSync(path.join(dir, '.claude-plugin'));
+    writeFileSync(path.join(dir, '.claude-plugin', 'marketplace.json'), JSON.stringify({ plugins: [{ name: 'foo', description: 'Foo plugin' }, { name: 'bar', category: 'dev' }] }));
+    const out: Record<string, string> = {
+      'plugin list --json': `warning\n${JSON.stringify([{ id: 'foo@mk', version: '1.0.0', scope: 'user', enabled: true, mcpServers: { s: {} } }])}`,
+      'plugin marketplace list --json': JSON.stringify([{ name: 'mk', source: 'github', repo: 'o/r', installLocation: dir }]),
+    };
+    const v = await loadPlugins(localTransport, async (a) => out[a]);
+    assert.deepEqual(v.installed.map((p) => [p.name, p.marketplace, p.enabled, p.description, p.mcpServers]), [['foo', 'mk', true, 'Foo plugin', ['s']]]);
+    assert.deepEqual(v.available.map((p) => [p.id, p.category]), [['bar@mk', 'dev']]);
+    assert.deepEqual(v.marketplaces, [{ name: 'mk', source: 'github', target: 'o/r' }]);
+    await assert.rejects(loadPlugins(localTransport, async () => 'boom'), /could not read the plugin list: boom/);
   });
 });

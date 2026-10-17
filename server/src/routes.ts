@@ -3,20 +3,21 @@ import path from 'node:path';
 import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import {
-  createConnectionBody, createProfileBody, createProjectBody, createSessionBody, lastConnectionBody, loginCodeBody, patchConfigBody, patchProjectBody, patchSessionBody, uuidSchema,
-  findLines, type Connection, type HandoffResult, type HistoryItem, type Project, type ProjectHit, type SessionMeta, type SessionStatus, type SlashCommandInfo,
+  createConnectionBody, createProfileBody, pluginActionSchema, createProjectBody, createSessionBody, lastConnectionBody, loginCodeBody, patchConfigBody, patchProjectBody, patchSessionBody, uuidSchema,
+  findLines, type Connection, type HandoffResult, type HistoryItem, type PluginActionResult, type PluginsView, type Project, type ProjectHit, type SessionMeta, type SessionStatus, type SlashCommandInfo,
 } from '@ccui/shared';
 import { versionWarning, type Connections } from './connections';
 import { ensureMeta, listProjectSessions, openSpecFor } from './domain';
 import { buildExport } from './export';
 import { parseGitStatus } from './git';
+import { loadPlugins, pluginArgs } from './plugins';
 import { buildHandoff } from './handoff';
 import { parseHistory } from './runtime/jsonl';
 import { logDay, logDays, readLogs } from './logs';
-import { activate, DEFAULT_PROFILE, knownProfile, listProfiles, logout, removeProfile, sendCode, startLogin, usageFor } from './profiles';
+import { activate, activeConfigDir, DEFAULT_PROFILE, knownProfile, listProfiles, logout, removeProfile, sendCode, startLogin, usageFor } from './profiles';
 import type { SessionHub } from './hub';
 import { readSessionLog } from './session-log';
-import { checkConnection, validClaudePath, validTarget } from './ssh-util';
+import { checkConnection, claudeExpr, DEFAULT_CLAUDE_PATH, shq, validClaudePath, validTarget } from './ssh-util';
 import type { Store } from './store';
 
 interface Deps { store: Store; hub: SessionHub; conns: Connections }
@@ -227,6 +228,32 @@ export function buildApi({ store, hub, conns }: Deps) {
       cmdCache.set(key, { at: Date.now(), list });
       return c.json(list);
     } catch { return c.json([]); }
+  });
+
+  // `/plugin` panel: `claude plugin …` on the project's machine through the transport's shell (same path as `!cmd`, local or SSH)
+  const claudeCli = (p: Project) => {
+    const conn = connections().find((c) => c.id === p.connectionId);
+    const cfg = p.connectionId === 'local' ? activeConfigDir() : null; // local profiles keep their own plugins in their config dir
+    const bin = `${cfg ? `CLAUDE_CONFIG_DIR=${shq(cfg)} ` : ''}${conn?.kind === 'ssh' ? claudeExpr(conn.claudePath ?? DEFAULT_CLAUDE_PATH) : 'claude'}`;
+    const { transport } = conns.get(p.connectionId);
+    return { transport, run: (args: string) => transport.shell(p.path, `${bin} ${args}`) };
+  };
+  api.get('/projects/:id/plugins', async (c) => {
+    const p = project(c.req.param('id'));
+    if (!p) return c.json({ error: 'projeto desconhecido' }, 404);
+    const { transport, run } = claudeCli(p);
+    try { return c.json(await loadPlugins(transport, async (a) => (await run(a)).output) satisfies PluginsView); } catch (e) { return bad(c, (e as Error).message); }
+  });
+  api.post('/projects/:id/plugins', async (c) => {
+    const p = project(c.req.param('id'));
+    if (!p) return c.json({ error: 'projeto desconhecido' }, 404);
+    const a = await body(c, pluginActionSchema);
+    if (!a) return bad(c, 'invalid plugin action');
+    const { transport, run } = claudeCli(p);
+    const r = await run(pluginArgs(a));
+    let view: PluginsView | undefined, error: string | undefined;
+    try { view = await loadPlugins(transport, async (x) => (await run(x)).output); } catch (e) { error = (e as Error).message; }
+    return c.json({ ok: r.exitCode === 0, output: r.output.trim(), view, error } satisfies PluginActionResult);
   });
 
   // "Refresh" button: reloads skills/plugins into the live session and drops the cached `/` list so the next fetch sees them
