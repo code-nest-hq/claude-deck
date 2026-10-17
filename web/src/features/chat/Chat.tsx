@@ -315,11 +315,13 @@ export function Chat() {
               <div className="text-xs font-semibold text-zinc-100">
                 {p.toolName === 'request_model_upgrade'
                   ? <>Claude quer trocar pra <span className="text-zinc-100">Sonnet 5</span> — {String((p.input as { reason?: unknown } | null)?.reason ?? '')}</>
+                  : p.toolName === 'use_opus'
+                  ? <>Claude quer usar <span className="text-zinc-100">Opus</span> (background) pra análise arquitetural. Negar usa Sonnet.</>
                   : <>Permitir <code className="rounded bg-zinc-800/80 px-1 py-0.5 font-mono text-[11px]">{p.toolName}</code>?</>}
               </div>
             </div>
             <div className="flex flex-col gap-3 p-4">
-              {p.toolName !== 'request_model_upgrade' && <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-md border border-zinc-800/90 bg-zinc-950 p-3 font-mono text-xs text-zinc-300">{json(p.input)}</pre>}
+              {p.toolName !== 'request_model_upgrade' && p.toolName !== 'use_opus' && <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-md border border-zinc-800/90 bg-zinc-950 p-3 font-mono text-xs text-zinc-300">{json(p.input)}</pre>}
               <div className="flex items-center gap-1.5">
                 <button className="inline-flex items-center gap-1.5 rounded-md bg-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-950 transition-all hover:bg-zinc-200 active:scale-[0.98]" onClick={() => answer(p.reqId, true)}>Permitir</button>
                 <button className="inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium text-zinc-400 transition-colors hover:bg-rose-500/10 hover:text-rose-400" onClick={() => answer(p.reqId, false)}>Negar</button>

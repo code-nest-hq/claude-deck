@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { createSdkMcpServer, query, tool, type AgentDefinition, type CanUseTool, type McpServerStatus, type PermissionResult, type Query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import { createSdkMcpServer, query, tool, type AgentDefinition, type CanUseTool, type HookCallback, type McpServerStatus, type PermissionResult, type Query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { EFFORTS, MODELS, type EventBody, type HistoryItem, type McpAction, type McpServerView, type Model, type ModelUsage, type PlanUsage, type ShellResult, type SlashCommandInfo, type UsageTotals } from '@ccui/shared';
 import { z } from 'zod';
 import { visibleCommands } from '../commands';
@@ -95,6 +95,9 @@ async function mcpStatus(q: Query, action?: McpAction): Promise<{ servers: McpSe
 export const forbiddenModel = (m?: string) => !!m && /opus|fable/i.test(m);
 
 // Model Routing: read-only exploration runs on Haiku even when the main turn is Sonnet (the SDK can't switch model per tool call)
+export const OPUS_AGENT = 'opus-architect';
+export const SONNET_AGENT = 'sonnet-architect';
+const ARCHITECT_PROMPT = 'You are a senior software architect, read-only. Never edit files or run commands that change anything. Analyze the architecture asked about and answer concisely: findings, trade-offs, a clear recommendation, with file:line references.';
 export const ROUTING_AGENTS: Record<string, AgentDefinition> = {
   'haiku-explorer': {
     description: 'Read-only exploration: find where something is defined or used, read several files and report what matters. Use it instead of reading many files yourself.',
@@ -102,7 +105,33 @@ export const ROUTING_AGENTS: Record<string, AgentDefinition> = {
     tools: ['Read', 'Grep', 'Glob', 'Bash'],
     model: 'haiku',
   },
+  // Opus is allowed ONLY here (never as a session model): background, read-only, and gated by a user prompt (opusGate).
+  // Denied -> the call is rewritten to sonnet-architect, same job on Sonnet.
+  [OPUS_AGENT]: {
+    description: 'Deep architectural analysis or design that Sonnet cannot do well (cross-module design, hard trade-offs, subtle architectural bugs). Expensive: use only when truly needed; the user is asked for permission first.',
+    prompt: ARCHITECT_PROMPT,
+    tools: ['Read', 'Grep', 'Glob', 'Bash'],
+    model: 'opus',
+    background: true,
+  },
+  [SONNET_AGENT]: {
+    description: 'Architectural analysis on Sonnet. Used automatically when Opus is denied; do not pick it directly.',
+    prompt: ARCHITECT_PROMPT,
+    tools: ['Read', 'Grep', 'Glob', 'Bash'],
+    model: 'sonnet',
+    background: true,
+  },
 };
+
+// Gate for the Opus agent: ask first, fall back to Sonnet on deny. Runs as a PreToolUse hook so it also applies in bypassPermissions.
+export async function opusGate(
+  toolInput: unknown,
+  ask: (input: Record<string, unknown>) => Promise<boolean>,
+): Promise<{ hookSpecificOutput: { hookEventName: 'PreToolUse'; permissionDecision: 'allow'; updatedInput: Record<string, unknown> } } | Record<string, never>> {
+  const input = (toolInput ?? {}) as Record<string, unknown>;
+  if (input.subagent_type !== OPUS_AGENT || (await ask(input))) return {};
+  return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow', updatedInput: { ...input, subagent_type: SONNET_AGENT } } };
+}
 
 class Live implements LiveSession {
   private input = channel<SDKUserMessage>();
@@ -119,6 +148,15 @@ class Live implements LiveSession {
   private stderrTail = '';
   private q: Query;
   private pump: Promise<void>;
+
+  private opusHook: HookCallback = async (input, _id, { signal }) => {
+    if (input.hook_event_name !== 'PreToolUse') return {};
+    const ask = async (i: Record<string, unknown>) => {
+      const r = await this.canUseTool('use_opus', i, { signal } as never);
+      return r?.behavior === 'allow';
+    };
+    return opusGate(input.tool_input, ask);
+  };
 
   private canUseTool: CanUseTool = (toolName, input, { signal }) =>
     new Promise<PermissionResult>((resolve) => {
@@ -159,12 +197,12 @@ class Live implements LiveSession {
         permissionMode: o.permissionMode,
         allowDangerouslySkipPermissions: o.permissionMode === 'bypassPermissions',
         systemPrompt: o.routing
-          ? { type: 'preset', preset: 'claude_code', append: 'Este projeto usa roteamento de modelo pra economizar tokens: se você estiver rodando em Haiku e perceber que a tarefa precisa de mais raciocínio (mudanças em vários arquivos, arquitetura, lógica complexa), chame a ferramenta request_model_upgrade explicando o motivo antes de continuar. Pra explorar código (achar onde algo é definido/usado, ler vários arquivos), delegue ao subagent haiku-explorer em vez de ler tudo você mesmo.' }
+          ? { type: 'preset', preset: 'claude_code', append: 'Este projeto usa roteamento de modelo pra economizar tokens: se você estiver rodando em Haiku e perceber que a tarefa precisa de mais raciocínio (mudanças em vários arquivos, arquitetura, lógica complexa), chame a ferramenta request_model_upgrade explicando o motivo antes de continuar. Pra explorar código (achar onde algo é definido/usado, ler vários arquivos), delegue ao subagent haiku-explorer em vez de ler tudo você mesmo. Só para análise ou desenho arquitetural profundo que o Sonnet não faria bem (decisões entre módulos, trade-offs difíceis), delegue ao subagent opus-architect; é caro e o usuário é consultado antes, então use raramente.' }
           : { type: 'preset', preset: 'claude_code' },
         settingSources: o.lean ? [] : ['user', 'project', 'local'],
         includePartialMessages: true,
         canUseTool: this.canUseTool,
-        ...(routingServer ? { mcpServers: { routing: routingServer }, agents: ROUTING_AGENTS } : {}),
+        ...(routingServer ? { mcpServers: { routing: routingServer }, agents: ROUTING_AGENTS, hooks: { PreToolUse: [{ matcher: 'Agent|Task', hooks: [this.opusHook] }] } } : {}),
         spawnClaudeCodeProcess: (so) => transport.spawn(so, (s) => { this.stderrTail = (this.stderrTail + s).slice(-2000); }),
       },
     });
@@ -177,7 +215,8 @@ class Live implements LiveSession {
         // defesa em profundidade: a allowlist é aplicada em open(); aqui confere o modelo efetivo no init e em CADA resposta
         // (cobre qualquer caminho que troque o modelo no meio da sessão: comando, configuração, ambiente)
         const model = m.type === 'system' && m.subtype === 'init' ? m.model : m.type === 'assistant' ? m.message.model : undefined;
-        if (forbiddenModel(model)) {
+        // subagent messages (parent_tool_use_id set) may be Opus via opus-architect; the session's own model never may
+        if (forbiddenModel(model) && !(m.type === 'assistant' && m.parent_tool_use_id)) {
           this.out.push({ type: 'error', code: 'runtime', message: `modelo não permitido: ${model}. A sessão foi encerrada.` });
           this.q.close();
           break;

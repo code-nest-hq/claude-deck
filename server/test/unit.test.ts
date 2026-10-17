@@ -23,7 +23,7 @@ const { recordSession, readSessionLog, flushSessionLog } = await import('../src/
 const { redactString, redactDeep } = await import('../src/redact');
 const { buildExport } = await import('../src/export');
 const { buildHandoff } = await import('../src/handoff');
-const { ROUTING_AGENTS, forbiddenModel } = await import('../src/runtime/sdk-runtime');
+const { ROUTING_AGENTS, forbiddenModel, opusGate, OPUS_AGENT, SONNET_AGENT } = await import('../src/runtime/sdk-runtime');
 
 const spec = { cwd: '/tmp/project', model: 'sonnet' as Model, effort: 'medium' as const, lean: true, routing: true, permissionMode: 'default' as const };
 const label = () => ({ projectId: 'p1', projectName: 'Test project', sessionName: 'test session' });
@@ -527,10 +527,21 @@ describe('session handoff', () => {
 });
 
 describe('routing subagents', () => {
-  test('every routing agent is pinned to Haiku', () => {
-    for (const a of Object.values(ROUTING_AGENTS)) {
-      assert.equal(a.model, 'haiku');
-      assert.ok(!forbiddenModel(a.model));
+  test('only the gated architect agent may use Opus; the rest are haiku/sonnet', () => {
+    for (const [name, a] of Object.entries(ROUTING_AGENTS)) {
+      if (name === OPUS_AGENT) assert.equal(a.model, 'opus');
+      else assert.ok(!forbiddenModel(a.model));
+      assert.ok(!/fable/i.test(a.model ?? ''));
     }
+    assert.equal(ROUTING_AGENTS[SONNET_AGENT]?.model, 'sonnet');
+  });
+  test('opusGate: approved keeps the call, denied rewrites to the Sonnet agent, others untouched', async () => {
+    const input = { subagent_type: OPUS_AGENT, prompt: 'p' };
+    assert.deepEqual(await opusGate(input, async () => true), {});
+    const denied = await opusGate(input, async () => false);
+    assert.deepEqual('hookSpecificOutput' in denied && denied.hookSpecificOutput.updatedInput, { subagent_type: SONNET_AGENT, prompt: 'p' });
+    let asked = false;
+    assert.deepEqual(await opusGate({ subagent_type: 'haiku-explorer' }, async () => (asked = true)), {});
+    assert.equal(asked, false);
   });
 });
