@@ -24,7 +24,7 @@ Web app to run Claude Code sessions in the browser instead of the terminal: chat
 - Preserve existing patterns; reuse existing abstractions (`Transport`, `ClaudeRuntime`, `OpenOptions`, `LiveSession`, `SessionHub`) instead of creating new layers.
 - Don't duplicate logic; don't introduce Controller/Service/Repository — the project doesn't use those layers.
 - Focused changes: no unrelated refactors, no swapping dependencies without need, don't touch `web/dist` (generated) or `node_modules`.
-- **Never use Opus or Fable**, in any model/config/suggestion. Only `haiku`/`sonnet` (see `MODELS` in `shared/src/index.ts`, and the `forbiddenModel` check in `server/src/runtime/sdk-runtime.ts:43`).
+- **Never use Fable. Opus never as a session model**: sessions are only `haiku`/`sonnet` (see `MODELS` in `shared/src/index.ts`, and the `forbiddenModel` check in `server/src/runtime/sdk-runtime.ts`). The single exception is the background, read-only `opus-architect` subagent (`ROUTING_AGENTS`), gated by a user permission prompt (`opusGate`) that falls back to `sonnet-architect` on deny. Don't add Opus anywhere else.
 - Preserve the already-confirmed remote runtime (SSH) decisions — see `docs/architecture.md` §Remote/SSH — don't replace with a generic implementation without checking the code first.
 - No prior git history before 2026-09-22 was an explicit project decision. Tests exist since 2026-09-30 (`server/test/`, built-in `node:test`); extend them when changing the covered areas, don't add a test framework.
 - Write everything — code, comments, commit messages, docs — in English, never Portuguese.

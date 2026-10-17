@@ -270,8 +270,9 @@ export const useApp = create<App>((set, get) => {
       if (a) sock?.send({ type: 'mcp', sessionId: a.sessionId, id, action });
     },
     answer(reqId, allow, updatedInput) {
-      const a = get().active;
-      if (a) sock?.send({ type: 'permission', sessionId: a.sessionId, reqId, allow, updatedInput });
+      // the session that owns the prompt, not the active tab: switching tabs between render and click must not misroute it
+      const sessionId = Object.keys(get().chats).find((id) => get().chats[id].pending.some((p) => p.reqId === reqId));
+      if (sessionId) sock?.send({ type: 'permission', sessionId, reqId, allow, updatedInput });
     },
 
     async chooseConnection(connectionId) {

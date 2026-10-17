@@ -138,8 +138,11 @@ export function buildApi({ store, hub, conns }: Deps) {
     const p = project(c.req.param('id'));
     const b = await body(c, patchProjectBody);
     if (!p || !b) return bad(c, 'dados inválidos');
+    const bypassOff = p.bypass && b.bypass === false;
     Object.assign(p, b);
     await store.projects.save();
+    // permissionMode is fixed when a process opens: sessions already live would keep running without prompts
+    if (bypassOff) for (const s of store.sessions.data.sessions) if (s.projectId === p.id) hub.closeLive(s.sessionId);
     return c.json(p);
   });
 

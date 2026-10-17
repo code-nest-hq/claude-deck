@@ -39,7 +39,8 @@ export class FakeLive implements LiveSession {
     else this.reply(`echo: ${text}`);
   }
   async interrupt() {}
-  answerPermission() {}
+  answers: Array<{ reqId: string; allow: boolean }> = [];
+  answerPermission(reqId: string, allow: boolean) { this.answers.push({ reqId, allow }); }
   async setModel(m: Model) {
     if (this.closed) throw new Error('process is gone');
     this.models.push(m);
