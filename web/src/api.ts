@@ -1,4 +1,4 @@
-import type { Config, ConnStatus, Connection, DirEntry, Effort, GitInfo, HandoffResult, LogEntry, Model, PlanUsage, ProfileView, Project, ProjectHit, SessionRow, SessionStatus, SlashCommandInfo } from '@ccui/shared';
+import type { Config, ConnStatus, Connection, DirEntry, Effort, GitInfo, HandoffResult, LogEntry, Model, PlanUsage, PluginAction, PluginActionResult, PluginsView, ProfileView, Project, ProjectHit, SessionRow, SessionStatus, SlashCommandInfo } from '@ccui/shared';
 
 const KEY = 'ccui-token';
 let token: string | null = null;
@@ -41,6 +41,8 @@ export const api = {
   newSession: (pid: string, b: { name: string; model?: Model; effort?: Effort; routing?: boolean }) => req<{ sessionId: string }>('POST', `/api/projects/${pid}/sessions`, b),
   patchSession: (sid: string, projectId: string, b: { name?: string; favorite?: boolean; archived?: boolean; tags?: string[] }) => req<void>('PATCH', `/api/sessions/${sid}`, { projectId, ...b }),
   commands: (pid: string) => req<SlashCommandInfo[]>('GET', `/api/projects/${pid}/commands`),
+  plugins: (pid: string) => req<PluginsView>('GET', `/api/projects/${pid}/plugins`),
+  pluginAction: (pid: string, b: PluginAction) => req<PluginActionResult>('POST', `/api/projects/${pid}/plugins`, b),
   reload: (pid: string, sid: string) => req<{ live: boolean; plugins?: number; errors?: number }>('POST', `/api/projects/${pid}/sessions/${sid}/reload`),
   bgOutput: (pid: string, sid: string, taskId: string) => req<{ live: boolean; output: string | null }>('GET', `/api/projects/${pid}/sessions/${sid}/bg/${encodeURIComponent(taskId)}/output`),
   stopBgTask: (pid: string, sid: string, taskId: string) => req<{ stopped: boolean }>('POST', `/api/projects/${pid}/sessions/${sid}/bg/${encodeURIComponent(taskId)}/stop`),

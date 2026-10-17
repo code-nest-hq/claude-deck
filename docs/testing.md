@@ -41,6 +41,7 @@ When changing anything in `web/src/features/*` or the event protocol (`shared/sr
 - Attachments: images arrive as images, other files as a path reference, local and SSH; interrupting while an attachment is still being read doesn't send it.
 - Folder browser: navigating/selecting works on local and SSH connections, in both folder and file mode.
 - `/mcp`: the list matches the terminal's `/mcp` (with and without an open session); Reconnect/Enable/Disable refresh the same card; Lean projects show no user MCPs.
+- Plugins modal (`/plugin` or header button): Installed matches `claude plugin list`; Enable/Disable/Update/Uninstall, Install from Discover (each scope) and marketplace add/update/remove show the CLI output and refresh the list; works on an SSH project.
 - Session export: the "Exportar" button downloads a `.jsonl` whose first line is the manifest; with the mask on, no known secret shows up; a session with subagents lists them in `sources.subagents`; an SSH session exports too; auto-compact accept/decline show up as `compact.requested`/`compact.declined` in the Deck lines.
 - Composer: `/command` coloring (blue/red), `!` highlight, resize, and blocked commands (`/clear`, `/model`…) show the explanation instead of being sent.
 

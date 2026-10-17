@@ -140,6 +140,27 @@ export interface McpServerView {
 }
 export const mcpActionSchema = z.object({ kind: z.enum(['reconnect', 'enable', 'disable']), server: z.string().min(1).max(200) });
 export type McpAction = z.infer<typeof mcpActionSchema>;
+
+// `/plugin` panel: the terminal's `claude plugin …` run on the project's machine (local or SSH)
+export interface PluginView {
+  id: string; name: string; marketplace: string; version?: string; scope?: string; projectPath?: string; enabled: boolean;
+  description?: string; installedAt?: string; lastUpdated?: string; mcpServers: string[];
+}
+export interface PluginAvailable { id: string; name: string; marketplace: string; description?: string; category?: string }
+export interface MarketplaceView { name: string; source: string; target?: string }
+export interface PluginsView { installed: PluginView[]; available: PluginAvailable[]; marketplaces: MarketplaceView[] }
+export interface PluginActionResult { ok: boolean; output: string; view?: PluginsView; error?: string }
+const pluginIdSchema = z.string().regex(/^(?!-)[\w.-]+(@[\w.-]+)?$/).max(200);
+const pluginScopeSchema = z.enum(['user', 'project', 'local']).optional();
+// marketplace source: URL, GitHub `owner/repo` or path; never starts with `-` (option injection) and has no whitespace/control chars
+const marketplaceSourceSchema = z.string().trim().min(1).max(500).regex(/^[^\s\x00-\x1f-][^\s\x00-\x1f]*$/);
+export const pluginActionSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.enum(['install', 'uninstall', 'enable', 'disable', 'update']), plugin: pluginIdSchema, scope: pluginScopeSchema }),
+  z.object({ kind: z.literal('marketplace.add'), source: marketplaceSourceSchema, scope: pluginScopeSchema }),
+  z.object({ kind: z.literal('marketplace.remove'), name: pluginIdSchema }),
+  z.object({ kind: z.literal('marketplace.update'), name: pluginIdSchema.optional() }),
+]);
+export type PluginAction = z.infer<typeof pluginActionSchema>;
 export const ZERO_TOTALS: UsageTotals = { costUsd: 0, input: 0, output: 0, cacheCreation: 0, cacheRead: 0 };
 
 // ---- error log: one JSON line per entry in <data dir>/logs/YYYY-MM-DD.jsonl (local date) ----
