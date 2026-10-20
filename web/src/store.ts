@@ -5,26 +5,17 @@ import { addError, applyEvent, applySnapshot, emptyChat, type Chat } from './fea
 import { disableNotify, enableNotify, notify, notifyEnabled } from './notify';
 import { createSocket } from './ws';
 
-export interface Tab { projectId: string; sessionId: string }
-export interface Ui { palette: boolean; help: boolean; newSession: boolean; newFor: string | null; term: boolean; settingsFor: string | null; searchFor: string | null; appSettings: boolean; profile: boolean; logs: boolean; logFilter: string }
-export const SIDEBAR_W_MIN = 224;
-export const SIDEBAR_W_MAX = 420;
-export const SIDEBAR_W_DEFAULT = 288;
-// preferências de layout lembradas entre execuções: barra lateral visível/largura e grupos/projetos recolhidos (chaves "c:<conexão>", "p:<projeto>", "f")
-export interface Layout { sidebar: boolean; sidebarW: number; collapsed: Record<string, boolean> }
-const LAYOUT_KEY = 'ccui-layout';
-const clampW = (w: number) => Math.min(SIDEBAR_W_MAX, Math.max(SIDEBAR_W_MIN, w));
-const loadLayout = (): Layout => {
-  try {
-    const v = JSON.parse(localStorage.getItem(LAYOUT_KEY) ?? '{}');
-    return {
-      sidebar: v.sidebar !== false,
-      sidebarW: typeof v.sidebarW === 'number' ? clampW(v.sidebarW) : SIDEBAR_W_DEFAULT,
-      collapsed: v.collapsed && typeof v.collapsed === 'object' ? v.collapsed : {},
-    };
-  } catch { return { sidebar: true, sidebarW: SIDEBAR_W_DEFAULT, collapsed: {} }; }
-};
-const saveLayout = (l: Layout) => { try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(l)); } catch { /* ignora */ } };
+export type View =
+  | { name: 'home' }
+  | { name: 'remote' }
+  | { name: 'server'; connectionId: string }
+  | { name: 'project'; projectId: string }
+  | { name: 'sessions'; projectId: string }
+  | { name: 'chat'; projectId: string; sessionId: string };
+export interface Ui { palette: boolean; help: boolean; newSession: boolean; newFor: string | null; term: boolean; settingsFor: string | null; searchFor: string | null; appSettings: boolean; profile: boolean; logs: boolean; logFilter: string; activity: boolean }
+/** a finished turn, shown briefly in the toast stack; sessions that need the user are derived from `chats[*].pending` instead */
+export interface DoneToast { id: string; projectId: string; sessionId: string }
+
 type SessionPatch = { name?: string; favorite?: boolean; archived?: boolean; tags?: string[] };
 
 interface App {
@@ -34,13 +25,17 @@ interface App {
   projects: Project[];
   rows: Record<string, SessionRow[]>;
   active: { projectId: string; sessionId: string } | null;
-  tabs: Tab[];
+  /** sessionId -> projectId for every session this page has opened (they stay attached when you leave the chat) */
+  attachedTo: Record<string, string>;
+  view: View;
+  /** 1 = went deeper, -1 = went back; drives the layer transition */
+  navDir: 1 | -1;
+  toasts: DoneToast[];
   chats: Record<string, Chat>;
   status: Record<string, ConnStatus>;
   attention: Record<string, boolean>; // sessões que terminaram/pediram permissão fora de foco
   notifyOn: boolean;
   ui: Ui;
-  layout: Layout;
   commands: Record<string, SlashCommandInfo[]>; // chave "<projeto>:<lean>"
   attachments: Record<string, string[]>; // sessionId -> caminhos absolutos ainda não enviados
   logs: LogEntry[]; // error log entries pushed live since this page loaded (the Logs page merges them with the day's file)
@@ -48,13 +43,11 @@ interface App {
   reloadProjects(): Promise<void>;
   refreshRows(projectId: string): Promise<void>;
   open(projectId: string, sessionId: string): void;
-  closeTab(sessionId: string): void;
-  cycleTab(dir: 1 | -1): void;
+  go(view: View): void;
+  back(): void;
+  dismissToast(id: string): void;
   patchSession(sessionId: string, projectId: string, patch: SessionPatch): Promise<void>;
   setUi(p: Partial<Ui>): void;
-  toggleSidebar(): void;
-  setSidebarW(w: number): void;
-  toggleCollapsed(key: string): void;
   ensureCommands(projectId: string): Promise<void>;
   /** reloads skills/plugins into the active session and refetches the `/` list; resolves to a short status line */
   refreshSession(): Promise<string>;
@@ -72,6 +65,17 @@ interface App {
   chooseConnection(connectionId: string): Promise<void>;
 }
 
+const parentOf = (v: View, projects: Project[]): View => {
+  if (v.name === 'chat') return { name: 'sessions', projectId: v.projectId };
+  if (v.name === 'sessions') return { name: 'project', projectId: v.projectId };
+  if (v.name === 'project') {
+    const c = projects.find((p) => p.id === v.projectId)?.connectionId;
+    return c && c !== 'local' ? { name: 'server', connectionId: c } : { name: 'home' };
+  }
+  if (v.name === 'server') return { name: 'remote' };
+  return { name: 'home' };
+};
+
 let sock: ReturnType<typeof createSocket> | null = null;
 let started = false; // StrictMode roda efeitos duas vezes em dev
 const attached = new Map<string, string>(); // sessionId -> projectId (re-attach ao reconectar)
@@ -84,17 +88,27 @@ export const useApp = create<App>((set, get) => {
   };
   const nameOf = (sessionId: string) => {
     for (const rs of Object.values(get().rows)) { const r = rs.find((x) => x.sessionId === sessionId); if (r) return r.name; }
-    return 'Sessão';
+    return 'Session';
   };
   const handle = (m: ServerMsg) => {
     if (m.type === 'snapshot') set((s) => ({ chats: { ...s.chats, [m.sessionId]: applySnapshot(m) } }));
     else if (m.type === 'event') {
       const ev = m.event;
       set((s) => (s.chats[ev.sessionId] ? { chats: { ...s.chats, [ev.sessionId]: applyEvent(s.chats[ev.sessionId], ev) } } : s));
-      // sessão fora de foco (outra aba interna ou janela em segundo plano) terminou o turno ou pediu permissão
-      if ((ev.type === 'turn.completed' || ev.type === 'permission.requested') && (get().active?.sessionId !== ev.sessionId || document.hidden)) {
+      // session not on screen (another page, or the window is in the background) finished its turn or asked for permission
+      const v = get().view;
+      const onScreen = v.name === 'chat' && v.sessionId === ev.sessionId && !get().ui.profile && !get().ui.logs;
+      if ((ev.type === 'turn.completed' || ev.type === 'permission.requested') && (!onScreen || document.hidden)) {
         set((s) => ({ attention: { ...s.attention, [ev.sessionId]: true } }));
-        notify(nameOf(ev.sessionId), ev.type === 'turn.completed' ? 'Resposta concluída' : `Aguardando permissão: ${ev.toolName}`, ev.sessionId);
+        notify(nameOf(ev.sessionId), ev.type === 'turn.completed' ? 'Response finished' : `Waiting for permission: ${ev.toolName}`, ev.sessionId);
+        if (ev.type === 'turn.completed' && !document.hidden) {
+          const pid = attached.get(ev.sessionId);
+          const id = `${ev.sessionId}:${Date.now()}`;
+          if (pid) {
+            set((s) => ({ toasts: [...s.toasts.filter((t) => t.sessionId !== ev.sessionId), { id, projectId: pid, sessionId: ev.sessionId }] }));
+            setTimeout(() => get().dismissToast(id), 6000);
+          }
+        }
       }
     } else if (m.type === 'connection.status') {
       set((s) => ({ status: { ...s.status, [m.id]: m.status } }));
@@ -107,16 +121,26 @@ export const useApp = create<App>((set, get) => {
   };
 
   return {
-    tokenMissing: false, up: false, config: null, projects: [], rows: {}, active: null, tabs: [], chats: {}, status: {},
-    attention: {}, notifyOn: notifyEnabled(), ui: { palette: false, help: false, newSession: false, newFor: null, term: false, settingsFor: null, searchFor: null, appSettings: false, profile: false, logs: false, logFilter: '' },
+    tokenMissing: false, up: false, config: null, projects: [], rows: {}, active: null, attachedTo: {}, view: { name: 'home' }, navDir: 1, toasts: [], chats: {}, status: {},
+    attention: {}, notifyOn: notifyEnabled(), ui: { palette: false, help: false, newSession: false, newFor: null, term: false, settingsFor: null, searchFor: null, appSettings: false, profile: false, logs: false, logFilter: '', activity: false },
     logs: [],
-    layout: loadLayout(), commands: {}, attachments: {},
+    commands: {}, attachments: {},
 
     async start() {
       if (started) return;
       started = true;
       if (!initToken()) return set({ tokenMissing: true });
       await get().reloadProjects();
+      const saved = history.state?.view as View | undefined;
+      if (saved) {
+        set({ view: saved });
+        if (saved.name === 'chat') get().open(saved.projectId, saved.sessionId);
+      } else history.replaceState({ view: get().view, depth: 0 }, '');
+      window.addEventListener('popstate', (e) => {
+        const v = (e.state?.view as View | undefined) ?? { name: 'home' };
+        set((s) => ({ view: v, navDir: -1, ui: { ...s.ui, activity: false, profile: false, logs: false } }));
+        if (v.name === 'chat') get().open(v.projectId, v.sessionId);
+      });
       sock = createSocket({
         onMsg: handle,
         onStatus: (up) => set({ up }),
@@ -150,35 +174,33 @@ export const useApp = create<App>((set, get) => {
       attached.set(sessionId, projectId);
       set((s) => ({
         active: { projectId, sessionId },
-        tabs: s.tabs.some((t) => t.sessionId === sessionId) ? s.tabs : [...s.tabs, { projectId, sessionId }],
+        attachedTo: { ...s.attachedTo, [sessionId]: projectId },
         attention: { ...s.attention, [sessionId]: false },
+        toasts: s.toasts.filter((t) => t.sessionId !== sessionId),
         chats: s.chats[sessionId] ? s.chats : { ...s.chats, [sessionId]: emptyChat() },
       }));
       attach(sessionId, projectId);
+      get().go({ name: 'chat', projectId, sessionId });
     },
 
-    // fechar a aba só para de acompanhar a sessão nesta janela; o Claude continua rodando no backend
-    closeTab(sessionId) {
-      const { tabs, active } = get();
-      const i = tabs.findIndex((t) => t.sessionId === sessionId);
-      if (i < 0) return;
-      const rest = tabs.filter((t) => t.sessionId !== sessionId);
-      attached.delete(sessionId);
-      sock?.send({ type: 'detach', sessionId });
-      set({ tabs: rest });
-      if (active?.sessionId === sessionId) {
-        const next = rest[Math.min(i, rest.length - 1)];
-        if (next) get().open(next.projectId, next.sessionId); else set({ active: null });
-      }
+    // every level is a full-screen layer; the browser history mirrors the stack so Back / Alt+Left / the mouse button all work
+    go(view) {
+      const cur = get().view;
+      if (JSON.stringify(cur) === JSON.stringify(view)) return;
+      history.pushState({ view, depth: (history.state?.depth ?? 0) + 1 }, '');
+      set({ view, navDir: 1, ui: { ...get().ui, activity: false, profile: false, logs: false } });
     },
 
-    cycleTab(dir) {
-      const { tabs, active } = get();
-      if (tabs.length < 2) return;
-      const i = tabs.findIndex((t) => t.sessionId === active?.sessionId);
-      const next = tabs[(i + dir + tabs.length) % tabs.length];
-      get().open(next.projectId, next.sessionId);
+    back() {
+      const { ui, view, projects } = get();
+      if (ui.profile || ui.logs) { set({ ui: { ...ui, profile: false, logs: false } }); return; }
+      if ((history.state?.depth ?? 0) > 0) { history.back(); return; }
+      const parent = parentOf(view, projects);
+      set({ view: parent, navDir: -1 });
+      history.replaceState({ view: parent, depth: 0 }, '');
     },
+
+    dismissToast(id) { set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })); },
 
     async patchSession(sessionId, projectId, patch) {
       await api.patchSession(sessionId, projectId, patch);
@@ -186,23 +208,6 @@ export const useApp = create<App>((set, get) => {
     },
 
     setUi(p) { set((s) => ({ ui: { ...s.ui, ...p } })); },
-
-    toggleSidebar() {
-      const layout = { ...get().layout, sidebar: !get().layout.sidebar };
-      saveLayout(layout);
-      set({ layout });
-    },
-    setSidebarW(w) {
-      const layout = { ...get().layout, sidebarW: clampW(w) };
-      saveLayout(layout);
-      set({ layout });
-    },
-    toggleCollapsed(key) {
-      const { layout } = get();
-      const next = { ...layout, collapsed: { ...layout.collapsed, [key]: !layout.collapsed[key] } };
-      saveLayout(next);
-      set({ layout: next });
-    },
 
     // lista de comandos `/` do projeto (sem custo de tokens); só guarda resultado não vazio, para tentar de novo se falhou
     async ensureCommands(projectId) {
@@ -270,7 +275,7 @@ export const useApp = create<App>((set, get) => {
       if (a) sock?.send({ type: 'mcp', sessionId: a.sessionId, id, action });
     },
     answer(reqId, allow, updatedInput) {
-      // the session that owns the prompt, not the active tab: switching tabs between render and click must not misroute it
+      // the session that owns the prompt, not the active one: switching sessions between render and click must not misroute it
       const sessionId = Object.keys(get().chats).find((id) => get().chats[id].pending.some((p) => p.reqId === reqId));
       if (sessionId) sock?.send({ type: 'permission', sessionId, reqId, allow, updatedInput });
     },

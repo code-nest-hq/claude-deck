@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { EFFORTS, MODELS, type Effort, type Model } from '@ccui/shared';
 import { api } from '../api';
 import { useApp } from '../store';
+import { cycleTheme, getTheme, subscribeTheme, themeLabel } from '../theme';
 import { ServerForm } from '../features/connect/ServerForm';
 import { DEFAULT_PASTE_LINES, pasteThreshold, setPasteThreshold } from '../features/chat/pasted';
 
@@ -12,7 +13,8 @@ const section = 'mb-1.5 font-mono text-[10px] font-medium uppercase tracking-wid
 // por-projeto, mora aqui. Substitui o antigo botão "+ Nova sessão" no rodapé da sidebar (nova sessão já é
 // alcançável via Ctrl+K e pelo "+" de cada projeto).
 export function AppSettingsModal({ onClose }: { onClose: () => void }) {
-  const { config, reloadProjects } = useApp();
+  const { config, reloadProjects, notifyOn, toggleNotify } = useApp();
+  const theme = useSyncExternalStore(subscribeTheme, getTheme);
   const d = config?.defaults;
   const [addingServer, setAddingServer] = useState(false);
   const [err, setErr] = useState('');
@@ -27,6 +29,12 @@ export function AppSettingsModal({ onClose }: { onClose: () => void }) {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={onClose}>
       <div className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-900 p-4 shadow-[0_10px_30px_-10px_rgba(0,0,0,0.8)]" onClick={(e) => e.stopPropagation()}>
         <h2 className="mb-4 text-sm font-semibold text-zinc-100">Configurações</h2>
+
+        <div className={section}>Appearance &amp; alerts</div>
+        <div className="mb-5 flex gap-2">
+          <button className={`${field} w-auto px-3 text-left hover:border-zinc-700`} onClick={cycleTheme}>{themeLabel[theme]}</button>
+          <button className={`${field} w-auto px-3 text-left hover:border-zinc-700`} title="Alerts when a background session finishes or asks for permission" onClick={() => void toggleNotify()}>Notifications: {notifyOn ? 'on' : 'off'}</button>
+        </div>
 
         <div className={section}>Padrões</div>
         <p className="mb-2 text-[11px] leading-relaxed text-zinc-500">Usados por qualquer sessão/projeto que não define o próprio valor.</p>

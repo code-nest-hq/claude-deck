@@ -33,10 +33,10 @@ There is no `lint` script in `package.json` — don't document or suggest one un
 When changing anything in `web/src/features/*` or the event protocol (`shared/src/index.ts`), ask the user to confirm manually (or verify it yourself if you can run `npm run dev:server` + `npm run dev:web` and open the browser):
 
 - Chat renders and streams correctly (delta + completed).
-- Tabs open/close and keep the session state running in the background.
+- Leaving a chat (Back) keeps the session running; its "needs you" / "finished" toast and the top-bar pills appear on other screens, and clicking jumps back in.
 - The turn-phase indicator (routing/thinking) appears and disappears at the right moment.
 - The `AskUserQuestion` modal sends the right answer via `updatedInput`.
-- The routing/bypass toggle in the Sidebar reflects in the actual behavior of the next message.
+- The routing/bypass toggle in project settings (Project hub) reflects in the actual behavior of the next message.
 - The read-only terminal (`CommandsPanel`) shows `!cmd` and Task tabs without accepting input.
 - Attachments: images arrive as images, other files as a path reference, local and SSH; interrupting while an attachment is still being read doesn't send it.
 - Folder browser: navigating/selecting works on local and SSH connections, in both folder and file mode.

@@ -10,7 +10,7 @@ export const uuidSchema = z.string().uuid();
 
 export interface Connection { id: string; kind: 'local' | 'ssh'; target?: string; label: string; claudePath?: string }
 export type ConnStatus = 'up' | 'down' | 'reconnecting';
-export interface Project { id: string; name: string; connectionId: string; path: string; lean: boolean; routing?: boolean; bypass?: boolean; autoCompact?: boolean; model?: Model; effort?: Effort }
+export interface Project { id: string; name: string; connectionId: string; path: string; lean: boolean; routing?: boolean; bypass?: boolean; autoCompact?: boolean; model?: Model; effort?: Effort; /** accent hex (#rrggbb) shown on the project card */ color?: string }
 export interface SessionMeta {
   sessionId: string; projectId: string; name?: string; model?: Model; effort?: Effort; routing?: boolean;
   tags?: string[]; favorite?: boolean; archived?: boolean; createdAt: number; lastUsedAt: number;
@@ -47,9 +47,10 @@ export interface DirEntry { name: string; isDir: boolean }
 export const LOCAL: Connection = { id: 'local', kind: 'local', label: 'Local' };
 
 const name = (max: number) => z.string().trim().min(1).max(max);
-export const createProjectBody = z.object({ name: name(80), path: z.string().min(1).max(1024), lean: z.boolean().default(false), connectionId: z.string().min(1).default('local') });
+const colorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/);
+export const createProjectBody = z.object({ name: name(80), path: z.string().min(1).max(1024), lean: z.boolean().default(false), connectionId: z.string().min(1).default('local'), color: colorSchema.optional() });
 export const createConnectionBody = z.object({ target: z.string().min(1).max(255), label: name(80).optional(), claudePath: z.string().max(255).optional() });
-export const patchProjectBody = z.object({ name: name(80).optional(), lean: z.boolean().optional(), routing: z.boolean().optional(), bypass: z.boolean().optional(), autoCompact: z.boolean().optional(), model: modelSchema.optional(), effort: effortSchema.optional() });
+export const patchProjectBody = z.object({ name: name(80).optional(), lean: z.boolean().optional(), routing: z.boolean().optional(), bypass: z.boolean().optional(), autoCompact: z.boolean().optional(), model: modelSchema.optional(), effort: effortSchema.optional(), color: colorSchema.optional() });
 export const patchConfigBody = z.object({ model: modelSchema.optional(), effort: effortSchema.optional() })
   .refine((b) => b.model !== undefined || b.effort !== undefined, { message: 'nada para alterar' });
 /** plan rate-limit window: utilization 0-100, resets_at ISO 8601 */
