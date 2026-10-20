@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ModelUsage, SlashCommandInfo } from '@ccui/shared';
 import { fmtTokens } from '../../lib/format';
 import { useApp } from '../../store';
-import { IconLock, IconPencil, IconSend, IconShuffle } from '../../lib/icons';
+import { IconArrowLeft, IconLock, IconPencil, IconSend, IconShuffle } from '../../lib/icons';
+import { ActivityPills } from '../home/Activity';
 import { AskUserQuestionModal, isAskUserQuestion } from './AskUserQuestionModal';
 import { AttachMenu } from './AttachMenu';
 import { AutoCompactModal } from './AutoCompactModal';
@@ -140,7 +141,7 @@ function AttachedFilesPill({ sessionId, connectionId }: { sessionId: string; con
 }
 
 export function Chat() {
-  const { active, chats, rows, projects, config, status, up, ui, send, compactDeclined, shell, mcp, interrupt, answer, setUi, ensureCommands, refreshSession } = useApp();
+  const { active, chats, rows, projects, config, status, up, ui, back, send, compactDeclined, shell, mcp, interrupt, answer, setUi, ensureCommands, refreshSession } = useApp();
   const [refresh, setRefresh] = useState<{ state: 'idle' | 'loading' | 'done' | 'error'; msg: string }>({ state: 'idle', msg: '' });
   const chat = active ? chats[active.sessionId] : undefined;
   const project = projects.find((p) => p.id === active?.projectId);
@@ -187,9 +188,9 @@ export function Chat() {
   const withTokens = (s: string) => s.split(TOKEN_SPLIT_RE).map((part, i) =>
     i % 2 ? <span key={i} className="rounded-sm bg-sky-500/25 text-sky-200 [box-decoration-break:clone]">{part}</span> : part);
 
-  if (!active || !chat) return <div className="flex flex-1 items-center justify-center text-zinc-500">Selecione ou crie uma sessão (Ctrl+K)</div>;
+  if (!active || !chat) return <div className="flex flex-1 items-center justify-center text-zinc-500">Select or create a session (Ctrl+K)</div>;
 
-  const name = rows[active.projectId]?.find((r) => r.sessionId === active.sessionId)?.name ?? 'Sessão';
+  const name = rows[active.projectId]?.find((r) => r.sessionId === active.sessionId)?.name ?? 'Session';
   const busy = chat.state === 'running' || chat.state === 'awaiting_permission';
   const lastItem = chat.items.at(-1);
   const runningTool = lastItem?.kind === 'tool' && lastItem.output === undefined ? lastItem.name : undefined;
@@ -251,19 +252,23 @@ export function Chat() {
   return (
     <main className="flex min-h-0 flex-1 flex-col">
       <header className="flex items-center justify-between gap-3 border-b border-zinc-800/60 bg-zinc-950/90 px-4 py-2.5 backdrop-blur-md">
-        <h1 className="truncate text-sm font-medium tracking-tight text-zinc-100">{name}</h1>
+        <div className="flex min-w-0 items-center gap-2">
+          <button className="-ml-1.5 flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-sm text-zinc-400 transition-colors hover:bg-zinc-900 hover:text-zinc-100" title="Back (Alt+←)" onClick={back}><IconArrowLeft className="h-4 w-4" /> Sessions</button>
+          <h1 className="min-w-0 truncate text-sm tracking-tight text-zinc-600">{project?.name} / <span className="font-medium text-zinc-100">{name}</span></h1>
+        </div>
         <div className="flex items-center gap-3">
-          <button className="hidden items-center gap-2 rounded-md border border-zinc-800/60 bg-zinc-900/50 px-2.5 py-1 font-mono text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-900 sm:flex" title="Ver consumo detalhado (entrada, saída, cache)" onClick={() => setUsageOpen(true)}>
+          <ActivityPills />
+          <button className="hidden items-center gap-2 rounded-md border border-zinc-800/60 bg-zinc-900/50 px-2.5 py-1 font-mono text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-900 sm:flex" title="Detailed usage (input, output, cache)" onClick={() => setUsageOpen(true)}>
             <span className="text-zinc-300">${chat.totals.costUsd.toFixed(4)}</span>
             <span className="text-zinc-600">·</span>
             <span>{fmtTokens(allTokens)} tokens</span>
           </button>
-          {!up && <span className="text-xs text-rose-400">desconectado…</span>}
-          {busy && <button className="rounded-md border border-zinc-800 px-2.5 py-1 text-xs text-zinc-300 transition-colors hover:border-zinc-700 hover:bg-zinc-900" onClick={interrupt}>Pausar</button>}
+          {!up && <span className="text-xs text-rose-400">disconnected…</span>}
+          {busy && <button className="rounded-md border border-zinc-800 px-2.5 py-1 text-xs text-zinc-300 transition-colors hover:border-zinc-700 hover:bg-zinc-900" onClick={interrupt}>Pause</button>}
           <button
             className={`rounded-md border px-2.5 py-1 text-xs transition-colors disabled:opacity-40 ${refresh.state === 'error' ? 'border-rose-500/30 text-rose-300' : 'border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-900'}`}
             disabled={busy || refresh.state === 'loading'}
-            title={refresh.msg || 'Recarrega skills e plugins do disco nesta sessão (ex.: depois de criar uma skill ou instalar um plugin)'}
+            title={refresh.msg || 'Reload skills and plugins from disk for this session (e.g. after creating a skill or installing a plugin)'}
             onClick={async () => {
               setRefresh({ state: 'loading', msg: '' });
               try { setRefresh({ state: 'done', msg: await refreshSession() }); } catch (e) { setRefresh({ state: 'error', msg: (e as Error).message }); }
@@ -272,22 +277,21 @@ export function Chat() {
           >
             {refresh.state === 'loading' ? 'Refreshing…' : refresh.state === 'done' ? 'Refreshed ✓' : refresh.state === 'error' ? 'Refresh failed' : 'Refresh'}
           </button>
-          <button className="rounded-md border border-zinc-800 px-2.5 py-1 text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-900" title="Pesquisar texto nesta sessão" onClick={() => setSearchOpen(true)}>Pesquisar</button>
+          <button className="rounded-md border border-zinc-800 px-2.5 py-1 text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-900" title="Search text in this session" onClick={() => setSearchOpen(true)}>Search</button>
           <button className="rounded-md border border-zinc-800 px-2.5 py-1 text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-900" title="Servidores MCP: status, enable/disable, reconnect" onClick={openMcp}>MCP</button>
-          {project && <button className="rounded-md border border-zinc-800 px-2.5 py-1 text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-900" title="Plugins: install, enable/disable, update, marketplaces" onClick={() => setPluginsOpen(true)}>Plugins</button>}
           {chat.bgTasks.length > 0 && (() => {
             const running = chat.bgTasks.filter((t) => t.status === 'running').length;
             return (
               <button
                 className={`rounded-md border px-2.5 py-1 text-xs transition-colors ${running ? 'border-amber-500/40 text-amber-300 hover:bg-amber-500/10' : 'border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-900'}`}
-                title="Tarefas que o Claude deixou rodando em background"
+                title="Tasks Claude left running in the background"
                 onClick={() => setBgOpen(true)}
               >{running ? `● Background ${running}` : 'Background'}</button>
             );
           })()}
-          <button className={`rounded-md border px-2.5 py-1 text-xs transition-colors ${stampsOff[active.sessionId] ? 'border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-900' : 'border-zinc-700 bg-zinc-900 text-zinc-100'}`} title="Mostrar/ocultar data e hora das mensagens" onClick={() => setStampsOff((o) => ({ ...o, [active.sessionId]: !o[active.sessionId] }))}>Horário</button>
-          {project && <button className="rounded-md border border-zinc-800 px-2.5 py-1 text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-900" title="ID, path, modelo e uso desta sessão" onClick={() => setStatusOpen(true)}>Status</button>}
-          <button className="rounded-md border border-zinc-800 px-2.5 py-1 text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-900" title="Exportar o panorama completo da sessão para análise por outra IA" onClick={() => setExportOpen(true)}>Exportar</button>
+          <button className={`rounded-md border px-2.5 py-1 text-xs transition-colors ${stampsOff[active.sessionId] ? 'border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-900' : 'border-zinc-700 bg-zinc-900 text-zinc-100'}`} title="Show/hide message dates and times" onClick={() => setStampsOff((o) => ({ ...o, [active.sessionId]: !o[active.sessionId] }))}>Timestamps</button>
+          {project && <button className="rounded-md border border-zinc-800 px-2.5 py-1 text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-900" title="ID, path, model and usage of this session" onClick={() => setStatusOpen(true)}>Status</button>}
+          <button className="rounded-md border border-zinc-800 px-2.5 py-1 text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-900" title="Export the full session overview for analysis by another AI" onClick={() => setExportOpen(true)}>Export</button>
           <button className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs transition-colors ${ui.term ? 'border-zinc-700 bg-zinc-900 text-zinc-100' : 'border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-900'}`} title="Subagentes e comandos ! (Ctrl+J)" onClick={() => setUi({ term: !ui.term })}>Terminal</button>
         </div>
       </header>

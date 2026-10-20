@@ -1,6 +1,6 @@
 # Frontend (`web/`)
 
-React + Vite + Tailwind, strict TypeScript. No SPA router — a single layout (Sidebar + Tabs + Chat) driven by global state.
+React + Vite + Tailwind, strict TypeScript. No router library — project-first navigation: five full-screen levels (Home → Remote picker / server catalog → Project hub → Sessions → Chat), each covering the previous one, driven by `view` in the store and mirrored in the History API (Back button, `Alt+←` and the browser Back all call `back()`). Spec: `docs/superpowers/specs/2026-10-20-project-first-navigation-design.md`.
 
 ## Structure (`web/src/`)
 
@@ -15,19 +15,21 @@ notify.ts             Notification API (opt-in, never shows message content)
 theme.ts              light/dark/system theme (outside React, localStorage)
 features/chat/        Chat, reduce.ts (event reducer), Markdown, GitBar, CommandsPanel,
                        ShellCard, McpModal, SlashMenu, ToolCard, AttachMenu, AskUserQuestionModal
-features/sessions/    Tabs, Palette (Ctrl+K), Shortcuts (? modal), NewSessionModal
-features/projects/    Sidebar, ProjectSettingsModal (lean/routing/auto-compact/bypass),
+features/home/        Home (project catalog), RemotePicker, ServerCatalog, NewProjectModal (create + setup step),
+                       TopBar (Back + breadcrumb), Activity (pills, overlay, toasts), activity.ts (useActivity)
+features/sessions/    SessionsPage (open/archived), SessionRowItem, Palette (Ctrl+K), Shortcuts (? modal), NewSessionModal
+features/projects/    ProjectHub (project tools + sessions peek), ProjectSettingsModal (lean/routing/auto-compact/bypass),
                        FolderBrowserModal (pick a folder, or files to attach)
-features/connect/     ConnectScreen, ServerForm (initial connection setup)
-lib/                  commands.ts (slash-command search), format.ts (fmtTokens etc.),
+features/connect/     ServerForm (add an SSH server)
+lib/                  projectColor.ts (project accent: chosen or hashed from id), commands.ts (slash-command search), format.ts (fmtTokens etc.),
                        search.ts (normalization/matchRow)
 ```
 
 ## State (`store.ts`)
 
-Zustand, a single global store (`useApp`, the only hook — no per-feature local hooks). Holds: config, projects, `tabs`, `chats` (per `sessionId`), UI state (palette/help/newSession/terminal). The WebSocket is created inside `start()` and reattached on reconnect. Layout preferences (sidebar visibility, collapsed groups) persist in `localStorage` under the `ccui-` prefix.
+Zustand, a single global store (`useApp`, the only hook — no per-feature local hooks). Holds: config, projects, `view` (+ `navDir` for the layer transition), `attachedTo` (sessions opened on this page; they stay attached when you leave the chat), `chats` (per `sessionId`), `toasts` (finished turns), UI state (palette/help/newSession/terminal/activity). The WebSocket is created inside `start()` and reattached on reconnect.
 
-Main actions: `open()`, `closeTab()`, `send()` (includes the session's staged attachments), `interrupt()`, `answer()`, `shell()`, `mcp(id?, action?)`, `addAttachment()`/`removeAttachment()`.
+Main actions: `open()` (attaches and navigates to the chat), `go()`, `back()`, `send()` (includes the session's staged attachments), `interrupt()`, `answer()`, `shell()`, `mcp(id?, action?)`, `addAttachment()`/`removeAttachment()`.
 
 ## WebSocket
 
@@ -54,12 +56,12 @@ Main actions: `open()`, `closeTab()`, `send()` (includes the session's staged at
 | Feature | File | Note |
 |---|---|---|
 | Markdown | `features/chat/Markdown.tsx` | `react-markdown` + `remark-gfm` + `rehype-highlight`, memoized (avoids re-render on every streaming delta) |
-| Tabs | `features/sessions/Tabs.tsx` | dot color = session state (amber=awaiting_permission, pulsing blue=running, green=new event, gray=idle) |
+| Activity | `features/home/Activity.tsx` | pills + overlay + toasts, derived from `chats[*].pending/state` so nothing goes stale; "needs you" toasts persist, "finished" ones fade after 6s; suppressed for the session on screen |
 | Git bar | `features/chat/GitBar.tsx` | fetches `/api/projects/{id}/git`, refreshes at the end of each turn |
 | Read-only terminal | `features/chat/CommandsPanel.tsx` | shows `!` commands and per-Task (subagent) tabs; doesn't accept input — a deliberate decision, see `docs/architecture.md` |
 | Slash autocomplete | `features/chat/SlashMenu.tsx` | ranking: prefix > alias > name contains > description contains, max 40 items |
 | Composer | `features/chat/Chat.tsx` | height-resizable box with attach button and staged-files bar; a mirror div behind a transparent-text textarea colors the `/command` (blue = exists, red = unknown) and the `!` prefix; `/mcp` and `!cmd` are intercepted in `submit()` and never reach the model |
-| MCP modal (header "MCP" button or `/mcp`) | `features/chat/McpModal.tsx` | servers grouped by scope, status icons like the terminal; click for details, tools, Reconnect/Enable/Disable; needs-auth claude.ai connectors link to claude.ai settings |
+| MCP modal (chat header "MCP" button or `/mcp`; session-bound, so it stays in the chat) | `features/chat/McpModal.tsx` | servers grouped by scope, status icons like the terminal; click for details, tools, Reconnect/Enable/Disable; needs-auth claude.ai connectors link to claude.ai settings |
 | Plugins modal (header "Plugins" button or `/plugin`) | `features/chat/PluginsModal.tsx` | Installed (enable/disable/update/uninstall), Discover (install with a user/project/local scope), Marketplaces (add/update/remove); talks to `GET/POST /api/projects/:id/plugins` and reloads plugins into the open session after a successful action |
 | Rich input (pencil icon) | `features/chat/RichEditor.tsx` | Tiptap email-style editor: B/I/list/code/code block, Enter breaks line, Ctrl+Enter or Send button sends; output is markdown. Plain mode keeps `/` and `!` handling |
 | Logs | `features/logs/LogsPage.tsx` | Daily error log, live (`logs` in the store); filter by day, project, level, free text / error ID. The error ID under a chat error opens it here |

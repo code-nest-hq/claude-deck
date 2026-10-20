@@ -67,3 +67,41 @@ export function IconSend({ className }: Props) {
     </svg>
   );
 }
+
+export function IconArrowLeft({ className }: Props) {
+  return (
+    <svg {...base} className={className}>
+      <path d="M19 12H5" />
+      <path d="M12 19l-7-7 7-7" />
+    </svg>
+  );
+}
+
+export function IconPlus({ className }: Props) {
+  return (
+    <svg {...base} className={className}>
+      <path d="M12 5v14" />
+      <path d="M5 12h14" />
+    </svg>
+  );
+}
+
+export function IconServer({ className }: Props) {
+  return (
+    <svg {...base} className={className}>
+      <rect x="2" y="2" width="20" height="8" rx="2" />
+      <rect x="2" y="14" width="20" height="8" rx="2" />
+      <path d="M6 6h.01M6 18h.01" />
+    </svg>
+  );
+}
+
+export function IconPlug({ className }: Props) {
+  return (
+    <svg {...base} className={className}>
+      <path d="M9 2v6M15 2v6" />
+      <path d="M6 8h12v4a6 6 0 0 1-12 0z" />
+      <path d="M12 18v4" />
+    </svg>
+  );
+}

@@ -3,7 +3,7 @@ import { EFFORTS, MODELS, type Effort, type Model } from '@ccui/shared';
 import { api } from '../../api';
 import { useApp } from '../../store';
 
-function Toggle({ on, label, desc, tone = 'zinc', onClick }: { on: boolean; label: string; desc: string; tone?: 'zinc' | 'rose'; onClick: () => void }) {
+export function Toggle({ on, label, desc, tone = 'zinc', onClick }: { on: boolean; label: string; desc: string; tone?: 'zinc' | 'rose'; onClick: () => void }) {
   const dot = on ? (tone === 'rose' ? 'bg-rose-400' : 'bg-zinc-100') : 'bg-zinc-600';
   return (
     <button className="flex w-full items-start justify-between gap-3 rounded-md border border-zinc-800/80 bg-zinc-900/40 px-3 py-2.5 text-left transition-colors hover:border-zinc-700" onClick={onClick}>
