@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-20T00:00:00Z",
+  "title": "Design System: Code Nest",
+  "extensions": {
+    "colorMeta": {
+      "ink-deep": { "role": "neutral", "displayName": "Deep Ink", "canonical": "#09090b", "tonalRamp": ["#09090b", "#18181b", "#27272a", "#3f3f46", "#71717a", "#a1a1aa", "#e4e4e7", "#fafafa"] },
+      "warn-amber": { "role": "tertiary", "displayName": "Warn Amber", "canonical": "#fbbf24", "tonalRamp": ["#451a03", "#78350f", "#92400e", "#b45309", "#d97706", "#f59e0b", "#fbbf24", "#fef3c7"] },
+      "error-rose": { "role": "tertiary", "displayName": "Error Rose", "canonical": "#fb7185", "tonalRamp": ["#4c0519", "#881337", "#9f1239", "#be123c", "#e11d48", "#f43f5e", "#fb7185", "#ffe4e6"] }
+    },
+    "typographyMeta": {
+      "mono": { "displayName": "Mono", "purpose": "Paths, model ids, tokens, cost, code." },
+      "label": { "displayName": "Label", "purpose": "Dominant 12px UI size." }
+    },
+    "shadows": [
+      { "name": "floating", "value": "0 20px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1)", "purpose": "Modals and menus only (shadow-xl)." },
+      { "name": "selected-edge", "value": "inset 2px 0 0 0 #a1a1aa", "purpose": "Selected sidebar row left rule." }
+    ],
+    "motion": [
+      { "name": "routing-dot", "value": "1.2s ease-in-out infinite", "purpose": "Model Routing turn indicator." },
+      { "name": "hover-reveal", "value": "opacity 150ms", "purpose": "Close glyphs and secondary controls." }
+    ],
+    "breakpoints": []
+  },
+  "components": [
+    {
+      "name": "Meta Chip",
+      "kind": "chip",
+      "refersTo": "chip-meta",
+      "description": "Mono chip for model, cost or tokens.",
+      "html": "<button class=\"ds-chip\">sonnet · $0.04</button>",
+      "css": ".ds-chip{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#a1a1aa;background:rgba(24,24,27,.5);border:1px solid rgba(39,39,42,.6);border-radius:6px;padding:4px 10px;cursor:pointer}.ds-chip:hover{border-color:#3f3f46}.ds-chip:focus-visible{outline:2px solid #a1a1aa;outline-offset:2px}"
+    },
+    {
+      "name": "Sidebar Row",
+      "kind": "nav",
+      "refersTo": "sidebar-item-selected",
+      "description": "Session row; selected state shows a 2px inset left rule.",
+      "html": "<div class=\"ds-row ds-row-selected\">refactor auth</div>",
+      "css": ".ds-row{font:12px ui-sans-serif,system-ui;color:#a1a1aa;padding:6px 10px;border-radius:6px}.ds-row:hover{background:#18181b;color:#e4e4e7}.ds-row-selected{background:rgba(39,39,42,.6);color:#f4f4f5;box-shadow:inset 2px 0 0 0 #a1a1aa}"
+    },
+    {
+      "name": "Status Badge",
+      "kind": "chip",
+      "refersTo": "error-rose",
+      "description": "10px tracked badge with 10% tint and 25% border.",
+      "html": "<span class=\"ds-badge\">ERROR</span>",
+      "css": ".ds-badge{font:10px ui-sans-serif,system-ui;letter-spacing:.05em;color:#fda4af;background:rgba(244,63,94,.1);border:1px solid rgba(244,63,94,.25);border-radius:2px;padding:2px 6px}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Quiet Console",
+    "overview": "A calm, dense instrument panel for people who watch many sessions for hours. Neutrals carry the whole interface; color appears only to signal state.",
+    "keyCharacteristics": ["Zinc neutrals for all structure; semantic color for status only.", "Small type (11-14px), mono for machine-ish content.", "Flat tonal layering with hairline borders; shadows only on floating layers.", "Hover-reveal secondary controls; keyboard paths first-class.", "Dark and light share one component set via variable inversion."],
+    "rules": [
+      { "name": "The Status-Only Color Rule", "body": "Hue means state. If a colored element is not reporting running, waiting, failed, ok or routed model, make it zinc.", "section": "colors" },
+      { "name": "The Routing Trio Rule", "body": "Blue, amber and green dots belong to the Model Routing turn indicator only.", "section": "colors" },
+      { "name": "The Machine-Words-Are-Mono Rule", "body": "Paths, commands, model ids, tokens, costs and counts use mono.", "section": "typography" },
+      { "name": "The Flat-At-Rest Rule", "body": "Nothing casts a shadow until it floats above the page.", "section": "elevation" }
+    ],
+    "dos": ["Do express every neutral through the zinc scale so the light theme's inversion keeps working.", "Do keep secondary actions hover-revealed and always reachable by keyboard.", "Do use mono for paths, model ids, tokens and costs.", "Do check both themes."],
+    "donts": ["Don't introduce a brand accent color.", "Don't add gradients, glows, illustrations or decorative motion.", "Don't use shadows on resting surfaces.", "Don't hard-code hex or white/black in components."]
+  }
+}

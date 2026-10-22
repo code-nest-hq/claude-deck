@@ -76,3 +76,7 @@ docker/volumes/
 
 # Misc
 storybook-static/
+
+# Impeccable local state
+.impeccable/config.local.json
+web/.impeccable/hook.cache.json
