@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../../api';
 import { IconPlug, IconPlus, IconSearch, IconSettings } from '../../lib/icons';
 import { projectColor } from '../../lib/projectColor';
+import { ProjectName } from './ProjectName';
 import { useApp } from '../../store';
 import { PluginsModal } from '../chat/PluginsModal';
 import { jumpToLine, SearchModal } from '../chat/SearchModal';
@@ -30,13 +31,13 @@ export function ProjectHub({ projectId }: { projectId: string }) {
   const list = (rows[p.id] ?? []).filter((r) => !r.archived).sort((a, b) => b.lastModified - a.lastModified);
   const flags = [p.routing && 'Model Routing', p.lean && 'Lean', p.autoCompact && 'Auto-compact', p.bypass && 'Bypass'].filter(Boolean).join(' · ');
   return (
-    <div className="flex h-screen flex-col" style={{ '--c': projectColor(p) } as React.CSSProperties}>
+    <div className="flex h-full flex-col" style={{ '--c': projectColor(p) } as React.CSSProperties}>
       <TopBar back="Projects" crumb={p.name}>
         <button className={barBtnPrimary} onClick={() => setUi({ newSession: true, newFor: p.id })}><IconPlus className="h-3.5 w-3.5" /> New session</button>
       </TopBar>
       <div className="min-h-0 flex-1 overflow-y-auto px-8 py-8">
         <h1 className="flex items-center gap-3 text-2xl font-semibold tracking-tight text-zinc-100">
-          <span className="h-2.5 w-2.5 rounded-full" style={{ background: 'var(--c)' }} />{p.name}
+          <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: 'var(--c)' }} /><ProjectName p={p} />
         </h1>
         <p className="mb-8 mt-1 truncate font-mono text-xs text-zinc-600">{p.path}{flags && <span className="font-sans text-zinc-500"> · {flags}</span>}</p>
         <div className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">

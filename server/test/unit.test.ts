@@ -11,10 +11,11 @@ import { fakeRuntime, recorder, type FakeLive } from './fakes';
 
 // isolated data dir BEFORE loading anything that reads it (store.ts / logs.ts)
 process.env.CCUI_DATA_DIR = mkdtempSync(path.join(tmpdir(), 'ccui-test-data-'));
-const { SessionHub } = await import('../src/hub');
+const { SessionHub, STICKY_CTX_TOKENS } = await import('../src/hub');
 const { logDay, logDays, readLogs, logError } = await import('../src/logs');
 const { classifyHeuristic, learnedRoute, learnRoute } = await import('../src/runtime/routing');
 const { mapMessage } = await import('../src/runtime/events');
+const { applyEvent, emptyChat, liveTokens } = await import('../../web/src/features/chat/reduce');
 const { BgTasks } = await import('../src/runtime/bg-tasks');
 const { localTransport } = await import('../src/runtime/local-transport');
 const { encodeCwd } = await import('../src/ssh-util');
@@ -23,6 +24,7 @@ const { recordSession, readSessionLog, flushSessionLog } = await import('../src/
 const { redactString, redactDeep } = await import('../src/redact');
 const { buildExport } = await import('../src/export');
 const { buildHandoff } = await import('../src/handoff');
+const { onEnter, insideFence, fenceIfCode, insertBlock, bulletize, toMarkdown } = await import('../../web/src/features/chat/smartInput');
 const { loadPlugins, pluginArgs } = await import('../src/plugins');
 const { ROUTING_AGENTS, forbiddenModel, opusGate, OPUS_AGENT, SONNET_AGENT } = await import('../src/runtime/sdk-runtime');
 
@@ -91,6 +93,39 @@ describe('SessionHub send (fake runtime)', () => {
     assert.deepEqual(rt.lives[0].sent, ['o que é isso?']);
     const routed = h.events().find((e) => e.type === 'model.routed');
     assert.equal(routed?.type === 'model.routed' && routed.model, 'haiku');
+  });
+
+  describe('sticky routing', () => {
+    // two turns: the first is routed to `first`, then the context grows to `tokens`, then "o que é isso?" would go to Haiku
+    async function second(first: Model, tokens: number) {
+      const rt = fakeRuntime({ classify: async (t) => (t === 'one' ? first : 'haiku') });
+      const h = hubWith(rt);
+      await h.attach();
+      await h.hub.send(h.id, 'one');
+      await h.waitFor((e) => e.type === 'turn.completed');
+      rt.lives[0].out.push({ type: 'context.usage', percentage: 10, totalTokens: tokens, maxTokens: 200_000 });
+      await h.waitFor((e) => e.type === 'context.usage');
+      await h.hub.send(h.id, 'o que é isso?');
+      await h.waitFor((e) => e.type === 'message.completed' && e.text === 'echo: o que é isso?');
+      return rt;
+    }
+
+    test('big warm context on Sonnet: no classifier call, no downgrade', async () => {
+      const rt = await second('sonnet', STICKY_CTX_TOKENS + 1);
+      assert.deepEqual(rt.classified, ['one']);
+      assert.deepEqual(rt.lives[0].models, ['sonnet']);
+    });
+
+    test('small context on Sonnet: downgrades as before', async () => {
+      const rt = await second('sonnet', STICKY_CTX_TOKENS - 1);
+      assert.deepEqual(rt.classified, ['one', 'o que é isso?']);
+      assert.deepEqual(rt.lives[0].models, ['sonnet', 'haiku']);
+    });
+
+    test('big context already on Haiku: still classifies, so an upgrade stays possible', async () => {
+      const rt = await second('haiku', STICKY_CTX_TOKENS + 1);
+      assert.deepEqual(rt.classified, ['one', 'o que é isso?']);
+    });
   });
 
   test('without routing: no classifier call, no model switch', async () => {
@@ -596,5 +631,65 @@ describe('plugins panel', () => {
     assert.deepEqual(v.available.map((p) => [p.id, p.category]), [['bar@mk', 'dev']]);
     assert.deepEqual(v.marketplaces, [{ name: 'mk', source: 'github', target: 'o/r' }]);
     await assert.rejects(loadPlugins(localTransport, async () => 'boom'), /could not read the plugin list: boom/);
+  });
+});
+
+describe('smartInput (prompt markdown-as-you-type)', () => {
+  test('Enter continues bullet and numbered lists, and an empty item ends the list', () => {
+    assert.deepEqual(onEnter('* one', 5), { text: '* one\n* ', caret: 8 });
+    assert.deepEqual(onEnter('1. a\n2. b', 9), { text: '1. a\n2. b\n3. ', caret: 13 });
+    assert.deepEqual(onEnter('- a\n- ', 6), { text: '- a\n', caret: 4 });
+    assert.equal(onEnter('plain text', 10), null);
+  });
+  test('"```ts" + Enter opens a closed block; Enter inside a block is not special', () => {
+    assert.deepEqual(onEnter('```ts', 5), { text: '```ts\n\n```', caret: 6 });
+    assert.equal(insideFence('```ts\nconst a', 13), true);
+    assert.equal(onEnter('```\n* x', 7), null);
+    assert.equal(insideFence('```\nx\n```\ny', 12), false);
+  });
+  test('pasted code is fenced with a language guess; prose, lists and fenced text are left alone', () => {
+    assert.equal(fenceIfCode('const a = 1;\nconst b = () => a;'), '```js\nconst a = 1;\nconst b = () => a;\n```');
+    assert.equal(fenceIfCode('{\n  "a": 1\n}'), '```json\n{\n  "a": 1\n}\n```');
+    assert.equal(fenceIfCode('def f(x):\n    return x\n'), '```python\ndef f(x):\n    return x\n```');
+    assert.equal(fenceIfCode('just a sentence\nand another one'), null);
+    assert.equal(fenceIfCode('- one\n- two\n- three'), null);
+    assert.equal(fenceIfCode('```js\nconst a = 1;\nconst b = 2;\n```'), null);
+    assert.equal(fenceIfCode('const a = 1;'), null);
+  });
+  test('"* " / "- " becomes a bullet that Enter continues; it is sent as markdown, code blocks untouched', () => {
+    assert.deepEqual(bulletize('* ', 2), { text: '• ', caret: 2 });
+    assert.deepEqual(bulletize('a\n  - ', 6), { text: 'a\n  • ', caret: 6 });
+    assert.equal(bulletize('a * ', 4), null);
+    assert.equal(bulletize('```\n* ', 6), null);
+    assert.deepEqual(onEnter('• one', 5), { text: '• one\n• ', caret: 8 });
+    assert.equal(toMarkdown('• a\n• b\n```\n• keep\n```'), '- a\n- b\n```\n• keep\n```');
+  });
+  test('insertBlock puts the block on its own lines', () => {
+    assert.deepEqual(insertBlock('hi there', 3, 3, '```\nx\n```'), { text: 'hi \n```\nx\n```\nthere', caret: 13 });
+  });
+});
+
+describe('live token meter', () => {
+  const stream = (event: unknown) => mapMessage({ type: 'stream_event', event, parent_tool_use_id: null } as never);
+  test('stream events map to turn.usage / turn.progress', () => {
+    assert.deepEqual(stream({ type: 'message_start', message: { usage: { input_tokens: 3, output_tokens: 1, cache_creation_input_tokens: 10, cache_read_input_tokens: 100 } } }),
+      [{ type: 'turn.usage', phase: 'start', input: 3, output: 1, cacheCreation: 10, cacheRead: 100 }]);
+    assert.deepEqual(stream({ type: 'message_delta', usage: { output_tokens: 42 } }), [{ type: 'turn.usage', phase: 'end', output: 42 }]);
+    assert.deepEqual(stream({ type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: 'hmm' } }), [{ type: 'turn.progress', chars: 3 }]);
+  });
+  test('the meter adds API messages up, estimates between them, and resets with turn.completed', () => {
+    let seq = 0;
+    const ev = (body: object) => ({ ...body, sessionId: 's', seq: ++seq, ts: 1 }) as never;
+    let c = { ...emptyChat(), hydrated: true };
+    c = applyEvent(c, ev({ type: 'turn.usage', phase: 'start', input: 5, output: 1, cacheCreation: 0, cacheRead: 100 }));
+    assert.equal(liveTokens(c), 106);
+    c = applyEvent(c, ev({ type: 'turn.progress', chars: 35 }));
+    assert.equal(liveTokens(c), 116); // +35 chars ~ 10 tokens
+    c = applyEvent(c, ev({ type: 'turn.usage', phase: 'end', output: 20 }));
+    assert.equal(liveTokens(c), 125); // exact output replaces the estimate
+    c = applyEvent(c, ev({ type: 'turn.usage', phase: 'start', input: 1, output: 1, cacheCreation: 0, cacheRead: 130 }));
+    assert.equal(liveTokens(c), 125 + 132);
+    c = applyEvent(c, ev({ type: 'turn.completed', totals: { costUsd: 0, input: 6, output: 21, cacheCreation: 0, cacheRead: 230 }, inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, modelUsage: {} }));
+    assert.equal(liveTokens(c), 0);
   });
 });

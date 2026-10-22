@@ -10,7 +10,7 @@ export const uuidSchema = z.string().uuid();
 
 export interface Connection { id: string; kind: 'local' | 'ssh'; target?: string; label: string; claudePath?: string }
 export type ConnStatus = 'up' | 'down' | 'reconnecting';
-export interface Project { id: string; name: string; connectionId: string; path: string; lean: boolean; routing?: boolean; bypass?: boolean; autoCompact?: boolean; model?: Model; effort?: Effort; /** accent hex (#rrggbb) shown on the project card */ color?: string }
+export interface Project { id: string; name: string; connectionId: string; path: string; lean: boolean; routing?: boolean; bypass?: boolean; autoCompact?: boolean; model?: Model; effort?: Effort; /** accent hex (#rrggbb) shown on the project card */ color?: string; /** shown in the always-visible pinned bar */ pinned?: boolean }
 export interface SessionMeta {
   sessionId: string; projectId: string; name?: string; model?: Model; effort?: Effort; routing?: boolean;
   tags?: string[]; favorite?: boolean; archived?: boolean; createdAt: number; lastUsedAt: number;
@@ -50,7 +50,7 @@ const name = (max: number) => z.string().trim().min(1).max(max);
 const colorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/);
 export const createProjectBody = z.object({ name: name(80), path: z.string().min(1).max(1024), lean: z.boolean().default(false), connectionId: z.string().min(1).default('local'), color: colorSchema.optional() });
 export const createConnectionBody = z.object({ target: z.string().min(1).max(255), label: name(80).optional(), claudePath: z.string().max(255).optional() });
-export const patchProjectBody = z.object({ name: name(80).optional(), lean: z.boolean().optional(), routing: z.boolean().optional(), bypass: z.boolean().optional(), autoCompact: z.boolean().optional(), model: modelSchema.optional(), effort: effortSchema.optional(), color: colorSchema.optional() });
+export const patchProjectBody = z.object({ name: name(80).optional(), lean: z.boolean().optional(), routing: z.boolean().optional(), bypass: z.boolean().optional(), autoCompact: z.boolean().optional(), model: modelSchema.optional(), effort: effortSchema.optional(), color: colorSchema.optional(), pinned: z.boolean().optional() });
 export const patchConfigBody = z.object({ model: modelSchema.optional(), effort: effortSchema.optional() })
   .refine((b) => b.model !== undefined || b.effort !== undefined, { message: 'nada para alterar' });
 /** plan rate-limit window: utilization 0-100, resets_at ISO 8601 */
@@ -104,6 +104,10 @@ export type EventBody =
   | { type: 'user.message'; text: string }
   | { type: 'message.delta'; text: string }
   | { type: 'message.completed'; text: string }
+  // live token meter while a turn runs: one API message at a time ('start' carries its input side, 'end' the exact output);
+  // 'turn.progress' = characters streamed since (thinking / tool input), used to estimate output between the two
+  | { type: 'turn.usage'; phase: 'start' | 'end'; input?: number; output: number; cacheCreation?: number; cacheRead?: number }
+  | { type: 'turn.progress'; chars: number }
   | { type: 'tool.started'; toolUseId: string; name: string; input: unknown; taskId?: string }
   | { type: 'tool.result'; toolUseId: string; output: string; isError: boolean; taskId?: string }
   // subagente (Task tool): taskId = tool_use_id do Task tool. Só 1º nível vira aba no cliente.

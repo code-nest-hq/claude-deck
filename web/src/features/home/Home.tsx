@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import type { Project } from '@ccui/shared';
 import { api } from '../../api';
-import { IconPlus, IconServer, IconSettings } from '../../lib/icons';
+import { IconPin, IconPlus, IconServer, IconSettings } from '../../lib/icons';
 import { projectColor } from '../../lib/projectColor';
 import { useApp } from '../../store';
+import { ProjectName } from '../projects/ProjectName';
 import { ServerForm } from '../connect/ServerForm';
 import { useActivity } from './activity';
 import { NewProjectModal } from './NewProjectModal';
@@ -14,6 +15,7 @@ const statusDot = { up: 'bg-emerald-400', reconnecting: 'bg-amber-400 animate-pu
 
 function ProjectCard({ p, i }: { p: Project; i: number }) {
   const go = useApp((s) => s.go);
+  const reloadProjects = useApp((s) => s.reloadProjects);
   const rows = useApp((s) => s.rows[p.id]);
   const entries = useActivity().filter((e) => e.projectId === p.id);
   const needs = entries.filter((e) => e.kind === 'needs').length;
@@ -21,14 +23,23 @@ function ProjectCard({ p, i }: { p: Project; i: number }) {
   const open = (rows ?? []).filter((r) => !r.archived).length;
   const status = needs ? { dot: 'bg-amber-400', text: `${needs} needs you` } : running ? { dot: 'bg-blue-500 animate-pulse', text: `${running} running` } : null;
   return (
-    <button className={tile} style={{ '--c': projectColor(p), '--i': i } as React.CSSProperties} onClick={() => go({ name: 'project', projectId: p.id })}>
-      <span className="truncate text-sm font-semibold text-zinc-100">{p.name}</span>
+    <div
+      role="button" tabIndex={0} className={`${tile} group relative cursor-pointer`} style={{ '--c': projectColor(p), '--i': i } as React.CSSProperties}
+      onClick={() => go({ name: 'project', projectId: p.id })}
+      onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); go({ name: 'project', projectId: p.id }); } }}
+    >
+      <span className="flex items-center gap-1"><ProjectName p={p} reveal className="text-sm font-semibold text-zinc-100" /></span>
+      <button
+        title={p.pinned ? 'Unpin' : 'Pin to top bar'} aria-label={p.pinned ? 'Unpin project' : 'Pin project'}
+        className={`absolute right-3 top-3 rounded-md p-1 transition-all hover:bg-zinc-800 ${p.pinned ? 'text-amber-400' : 'text-zinc-500 opacity-0 hover:text-zinc-100 focus-visible:opacity-100 group-hover:opacity-100'}`}
+        onClick={async (e) => { e.stopPropagation(); await api.patchProject(p.id, { pinned: !p.pinned }); await reloadProjects(); }}
+      ><IconPin className="h-3.5 w-3.5" filled={p.pinned} /></button>
       <span className="mt-0.5 truncate font-mono text-[11px] text-zinc-600">{p.path}</span>
       <span className="mt-auto flex items-center gap-2 pt-4 text-[11px] text-zinc-500">
         {status && <><span className={`h-1.5 w-1.5 rounded-full ${status.dot}`} />{status.text} · </>}
         {open} {open === 1 ? 'session' : 'sessions'}
       </span>
-    </button>
+    </div>
   );
 }
 
@@ -52,7 +63,7 @@ export function Home() {
   const ssh = config?.connections.filter((c) => c.kind === 'ssh') ?? [];
   const online = ssh.filter((c) => status[c.id] === 'up').length;
   return (
-    <div className="flex h-screen flex-col">
+    <div className="flex h-full flex-col">
       <TopBar>
         <button className={barBtn} title="Shortcuts (?)" onClick={() => setUi({ help: true })}>?</button>
         <button className={barBtn} onClick={() => setUi({ profile: true, logs: false })}>Profile</button>
@@ -85,7 +96,7 @@ export function RemotePicker() {
   const [adding, setAdding] = useState(false);
   const ssh = config?.connections.filter((c) => c.kind === 'ssh') ?? [];
   return (
-    <div className="flex h-screen flex-col">
+    <div className="flex h-full flex-col">
       <TopBar back="Projects" crumb="Remote">
         <button className={barBtn} onClick={() => setAdding((a) => !a)}>{adding ? 'Cancel' : '+ Add server'}</button>
       </TopBar>
@@ -126,7 +137,7 @@ export function ServerCatalog({ connectionId }: { connectionId: string }) {
   const list = projects.filter((p) => p.connectionId === connectionId);
   const st = status[connectionId] ?? 'reconnecting';
   return (
-    <div className="flex h-screen flex-col">
+    <div className="flex h-full flex-col">
       <TopBar back="Servers" crumb={conn?.label ?? 'Server'}>
         <button
           className={`${barBtn} hover:text-rose-400`}

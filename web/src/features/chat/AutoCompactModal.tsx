@@ -1,11 +1,21 @@
 import { useEffect, useState } from 'react';
 import { fmtTokens } from '../../lib/format';
+import { Modal, ghost, primary } from '../../lib/Modal';
 import type { Chat } from './reduce';
 
 // % of the autocompact window. Past ~60% quality starts degrading (context rot) and every turn re-reads the whole
 // context, so compacting here is cheaper and the summary is built from a still-complete context (the CLI's own
 // auto-compact only fires near the limit).
 export const COMPACT_THRESHOLD = 60;
+// ...or this many tokens, whichever comes first: on a 1M window 60% is 600k tokens, which sessions never reach
+// (the largest context seen in the logs was ~250k), so the percentage alone would never fire there.
+export const COMPACT_TOKENS = 150_000;
+
+// The prompt cache lasts 5 min: after a longer pause the next message re-reads the whole context uncached (~12x the
+// cached price). Below this size that is cents, not worth interrupting.
+export const COLD_CACHE_MS = 5 * 60_000;
+export const COLD_CACHE_TOKENS = 50_000;
+export const isColdCache = (ctx: Chat['context']) => !!ctx && ctx.totalTokens >= COLD_CACHE_TOKENS && Date.now() - ctx.ts > COLD_CACHE_MS;
 
 // context.usage seq already answered (confirmed or cancelled) per session; survives switching sessions
 const handled = new Map<string, number>();
@@ -39,7 +49,7 @@ export function AutoCompactModal({ sessionId, chat, enabled, onCompact, onDeclin
     return () => clearTimeout(t);
   }, [finished, failed]);
 
-  const ask = enabled && !run && !busy && !external && !!ctx && ctx.percentage >= COMPACT_THRESHOLD && ctx.seq > (handled.get(sessionId) ?? 0);
+  const ask = enabled && !run && !busy && !external && !!ctx && (ctx.percentage >= COMPACT_THRESHOLD || ctx.totalTokens >= COMPACT_TOKENS) && ctx.seq > (handled.get(sessionId) ?? 0);
   if (!ask && !run && !external) return null;
 
   const answer = (yes: boolean) => {
@@ -56,44 +66,56 @@ export function AutoCompactModal({ sessionId, chat, enabled, onCompact, onDeclin
   const pct = finished ? 100 : Math.min(95, Math.round(95 * (1 - Math.exp(-(now - startedAt) / tau))));
   const tokens = cmp?.preTokens !== undefined && cmp.postTokens !== undefined ? `${fmtTokens(cmp.preTokens)} → ${fmtTokens(cmp.postTokens)} tokens` : undefined;
 
+  if (ask && !run) return (
+    <Modal
+      size="sm" title="Compactar a sessão?"
+      footer={<>
+        <button className={ghost} onClick={() => answer(false)}>Cancelar</button>
+        <button className={ghost} title="Abre uma sessão limpa com um resumo do que foi feito, sem carregar o histórico" onClick={handoff}>Nova sessão com handoff</button>
+        <button className={primary} onClick={() => answer(true)}>Compactar</button>
+      </>}
+    >
+      <p className="text-sm leading-relaxed text-zinc-400">
+        O contexto está em <span className="font-mono text-zinc-100">{Math.round(ctx!.percentage)}%</span> ({fmtTokens(ctx!.totalTokens)} de {fmtTokens(ctx!.maxTokens)} tokens).
+        Cada mensagem relê todo esse contexto: compactar agora economiza tokens e evita perda de qualidade em contextos longos.
+      </p>
+    </Modal>
+  );
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 text-left font-sans">
-      <div className="w-[26rem] max-w-full rounded-lg border border-zinc-700 bg-zinc-950 p-4 shadow-[0_10px_30px_-10px_rgba(0,0,0,0.8)]">
-        {ask && !run ? (
-          <>
-            <h2 className="text-sm font-semibold text-zinc-100">Compactar a sessão?</h2>
-            <p className="mt-2 text-xs leading-relaxed text-zinc-400">
-              O contexto está em <span className="font-mono text-zinc-100">{Math.round(ctx!.percentage)}%</span> ({fmtTokens(ctx!.totalTokens)} de {fmtTokens(ctx!.maxTokens)} tokens).
-              Cada mensagem relê todo esse contexto: compactar agora economiza tokens e evita perda de qualidade em contextos longos.
-            </p>
-            <div className="mt-4 flex justify-end gap-1.5">
-              <button className="rounded-md px-2.5 py-1.5 text-xs font-medium text-zinc-400 transition-colors hover:bg-zinc-900 hover:text-zinc-200" onClick={() => answer(false)}>Cancelar</button>
-              <button className="rounded-md px-2.5 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-900 hover:text-zinc-100" title="Abre uma sessão limpa com um resumo do que foi feito, sem carregar o histórico" onClick={handoff}>Nova sessão com handoff</button>
-              <button className="rounded-md bg-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-950 transition-colors hover:bg-zinc-200" onClick={() => answer(true)}>Compactar</button>
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="flex items-center gap-2">
-              {running && <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-zinc-600 border-t-zinc-100" />}
-              <h2 className="text-sm font-semibold text-zinc-100">{failed ? 'Falha ao compactar' : finished ? 'Sessão compactada' : 'Compactando a sessão…'}</h2>
-              <span className="flex-1" />
-              <span className="font-mono text-xs text-zinc-300">{pct}%</span>
-            </div>
-            <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-zinc-800">
-              <div className={`h-full rounded-full transition-[width] duration-300 ${failed ? 'bg-rose-400' : 'bg-zinc-100'}`} style={{ width: `${pct}%` }} />
-            </div>
-            <div className="mt-2 text-[11px] text-zinc-500">
-              {failed ? (cmp?.message ?? 'Erro desconhecido.') : finished ? (tokens ?? 'Concluído.') : 'Progresso estimado: o Claude Code só informa início e fim da compactação.'}
-            </div>
-            {(failed || external) && (
-              <div className="mt-3 flex justify-end">
-                <button className="text-xs text-zinc-500 hover:text-zinc-200" onClick={() => (failed ? setRun(null) : setHidden(true))}>{failed ? 'Fechar' : 'Ocultar'}</button>
-              </div>
-            )}
-          </>
-        )}
+    <Modal
+      size="sm"
+      title={<span className="flex items-center gap-2.5">{running && <span className="h-4 w-4 animate-spin rounded-full border-2 border-zinc-600 border-t-zinc-100" />}{failed ? 'Falha ao compactar' : finished ? 'Sessão compactada' : 'Compactando a sessão…'}</span>}
+      actions={<span className="mt-1 font-mono text-sm text-zinc-300">{pct}%</span>}
+      footer={(failed || external) ? <button className={ghost} onClick={() => (failed ? setRun(null) : setHidden(true))}>{failed ? 'Fechar' : 'Ocultar'}</button> : undefined}
+    >
+      <div className="h-1.5 overflow-hidden rounded-full bg-zinc-800">
+        <div className={`h-full rounded-full transition-[width] duration-300 ${failed ? 'bg-rose-400' : 'bg-zinc-100'}`} style={{ width: `${pct}%` }} />
       </div>
-    </div>
+      <div className="mt-3 text-sm text-zinc-500">
+        {failed ? (cmp?.message ?? 'Erro desconhecido.') : finished ? (tokens ?? 'Concluído.') : 'Progresso estimado: o Claude Code só informa início e fim da compactação.'}
+      </div>
+    </Modal>
+  );
+}
+
+// Auto-compact's second trigger: about to send after the cache went cold. Compacting now costs the same one uncached
+// read the message would, but leaves the session with a short context for every later turn.
+export function ColdCacheModal({ ctx, onSend, onCompact, onHandoff, onCancel }: { ctx: NonNullable<Chat['context']>; onSend: () => void; onCompact: () => void; onHandoff: () => void; onCancel: () => void }) {
+  const mins = Math.round((Date.now() - ctx.ts) / 60_000);
+  return (
+    <Modal
+      size="sm" title="Cache expirado" onClose={onCancel}
+      footer={<>
+        <button className={ghost} onClick={onSend}>Enviar assim mesmo</button>
+        <button className={ghost} title="Abre uma sessão limpa com um resumo do que foi feito, sem carregar o histórico" onClick={onHandoff}>Nova sessão com handoff</button>
+        <button className={primary} onClick={onCompact}>Compactar antes</button>
+      </>}
+    >
+      <p className="text-sm leading-relaxed text-zinc-400">
+        A sessão está parada há {mins} min, mais que os 5 min do cache. Enviar agora relê os <span className="font-mono text-zinc-100">{fmtTokens(ctx.totalTokens)}</span> tokens do contexto sem cache, a ~12× o preço normal.
+        Compactar custa essa mesma leitura, mas deixa as próximas mensagens baratas. Sua mensagem continua no campo de texto.
+      </p>
+    </Modal>
   );
 }

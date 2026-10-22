@@ -25,6 +25,8 @@ export interface Chat {
   state: SessionState;
   lastSeq: number;
   totals: UsageTotals;
+  // tokens of the turn in flight, before turn.completed brings the exact totals: finished API messages + the current one + streamed chars (estimate)
+  live?: { done: number; base: number; out: number; chars: number };
   lastTokens?: { input: number; output: number; cacheCreation: number; cacheRead: number };
   pending: PendingPermission[];
   lastEventAt: number;
@@ -34,7 +36,7 @@ export interface Chat {
   turnPhase: 'idle' | 'routing' | 'thinking'; // indicador de progresso enquanto não chega nenhum conteúdo do turno
   turnPhaseAt: number;
   // last context occupancy (seq = its event, so the auto-compact prompt fires once per turn)
-  context?: { percentage: number; totalTokens: number; maxTokens: number; seq: number };
+  context?: { percentage: number; totalTokens: number; maxTokens: number; seq: number; ts: number };
   compact?: { phase: 'running' | 'done' | 'failed'; startedAt: number; seq: number; preTokens?: number; postTokens?: number; message?: string };
 }
 
@@ -91,8 +93,10 @@ export function applyEvent(c: Chat, ev: ClaudeEvent): Chat {
   const next: Chat = { ...c, items, lastSeq: ev.seq, lastEventAt: ev.ts };
   // the progress indicator stays up for the whole turn (thinking, tools, streaming) and only ends with it
   if (ev.type === 'turn.completed' || ev.type === 'error' || (ev.type === 'session.state' && (ev.state === 'idle' || ev.state === 'exited'))) next.turnPhase = 'idle';
+  if (ev.type === 'error' || (ev.type === 'session.state' && (ev.state === 'idle' || ev.state === 'exited'))) next.live = undefined; // interrupted turn: no turn.completed will come
   switch (ev.type) {
     case 'user.message':
+      next.live = undefined;
       items.push({ kind: 'user', text: ev.text, routedModel: c.pendingRoutedModel });
       next.pendingRoutedModel = undefined;
       if (c.turnPhase !== 'thinking') { next.turnPhase = 'thinking'; next.turnPhaseAt = ev.ts; }
@@ -106,7 +110,18 @@ export function applyEvent(c: Chat, ev: ClaudeEvent): Chat {
       next.turnPhase = 'thinking';
       next.turnPhaseAt = ev.ts;
       break;
+    case 'turn.usage': {
+      const l = c.live ?? { done: 0, base: 0, out: 0, chars: 0 };
+      next.live = ev.phase === 'start'
+        ? { done: l.done + l.base + l.out, base: (ev.input ?? 0) + (ev.cacheCreation ?? 0) + (ev.cacheRead ?? 0), out: ev.output, chars: 0 }
+        : { ...l, out: ev.output, chars: 0 };
+      break;
+    }
+    case 'turn.progress':
+      if (c.live) next.live = { ...c.live, chars: c.live.chars + ev.chars };
+      break;
     case 'message.delta':
+      if (c.live) next.live = { ...c.live, chars: c.live.chars + ev.text.length };
       if (last?.kind === 'assistant' && last.streaming) items[items.length - 1] = { ...last, text: last.text + ev.text };
       else items.push({ kind: 'assistant', text: ev.text, streaming: true });
       break;
@@ -163,6 +178,7 @@ export function applyEvent(c: Chat, ev: ClaudeEvent): Chat {
       next.state = ev.state;
       break;
     case 'turn.completed':
+      next.live = undefined;
       next.totals = ev.totals;
       next.lastTokens = { input: ev.inputTokens, output: ev.outputTokens, cacheCreation: ev.cacheCreationTokens, cacheRead: ev.cacheReadTokens };
       // resumo só deste turno (com modelo usado); mostrado no terminal, não na conversa principal (ItemView ignora 'turn')
@@ -172,7 +188,7 @@ export function applyEvent(c: Chat, ev: ClaudeEvent): Chat {
       next.bgTasks = ev.tasks;
       break;
     case 'context.usage':
-      next.context = { percentage: ev.percentage, totalTokens: ev.totalTokens, maxTokens: ev.maxTokens, seq: ev.seq };
+      next.context = { percentage: ev.percentage, totalTokens: ev.totalTokens, maxTokens: ev.maxTokens, seq: ev.seq, ts: ev.ts };
       break;
     case 'compact':
       next.compact = ev.phase === 'started'
@@ -190,3 +206,8 @@ export function applyEvent(c: Chat, ev: ClaudeEvent): Chat {
   }
   return next;
 }
+
+const CHARS_PER_TOKEN = 3.5; // rough: only bridges the gap until the API reports the exact output of a message
+
+/** tokens spent so far in the running turn (0 when none) */
+export const liveTokens = (c: Chat) => c.live ? c.live.done + c.live.base + c.live.out + Math.round(c.live.chars / CHARS_PER_TOKEN) : 0;
