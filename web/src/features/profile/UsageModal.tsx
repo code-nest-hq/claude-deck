@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { PlanUsage, ProfileView, UsageBreakdown, UsageWindow } from '@ccui/shared';
 import { api } from '../../api';
+import { Modal, primary, secondary } from '../../lib/Modal';
 
 const HOUR = 3_600_000;
-const section = 'mb-2 font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-500';
+const section = 'mb-2 font-mono text-[11px] font-medium uppercase tracking-wider text-zinc-500';
 const card = 'rounded-lg border border-zinc-800 bg-zinc-950/40 p-4';
 
 const BEHAVIORS: Record<string, [string, string]> = {
@@ -183,22 +184,15 @@ export function UsageModal({ profile, onClose }: { profile: ProfileView; onClose
   const spend = rl?.spend;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={onClose}>
-      <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-900 p-5 shadow-[0_10px_30px_-10px_rgba(0,0,0,0.8)]" onClick={(e) => e.stopPropagation()}>
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <div>
-            <h2 className="text-sm font-semibold text-zinc-100">Uso do plano · {profile.name}</h2>
-            <div className="mt-0.5 text-xs text-zinc-500">
-              {String(profile.status?.email ?? '')}
-              {u?.subscription_type && <span className="ml-2 rounded bg-zinc-800 px-1.5 py-0.5 font-mono text-[10px] uppercase text-zinc-300">{u.subscription_type}</span>}
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            {u && <span className="text-[11px] text-zinc-600">atualizado {new Date(u.fetchedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>}
-            <button className="rounded-md border border-zinc-800 px-2.5 py-1 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-40" disabled={loading} onClick={() => void load()}>{loading ? 'Atualizando…' : 'Atualizar'}</button>
-          </div>
-        </div>
-
+    <Modal
+      size="lg" onClose={onClose} title={`Uso do plano · ${profile.name}`}
+      subtitle={<>{String(profile.status?.email ?? '')}{u?.subscription_type && <span className="ml-2 rounded bg-zinc-800 px-1.5 py-0.5 font-mono text-[10px] uppercase text-zinc-300">{u.subscription_type}</span>}</>}
+      actions={<div className="flex items-center gap-3">
+        {u && <span className="text-xs text-zinc-600">atualizado {new Date(u.fetchedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>}
+        <button className={secondary} disabled={loading} onClick={() => void load()}>{loading ? 'Atualizando…' : 'Atualizar'}</button>
+      </div>}
+      footer={<button className={primary} onClick={onClose}>Fechar</button>}
+    >
         {err && <div className="mb-3 text-sm text-rose-400">{err}</div>}
         {!u && loading && <div className="text-sm text-zinc-500">Consultando o uso…</div>}
         {u && !u.rate_limits_available && (
@@ -255,10 +249,6 @@ export function UsageModal({ profile, onClose }: { profile: ProfileView; onClose
           </div>
         )}
 
-        <div className="mt-5 flex justify-end border-t border-zinc-800/70 pt-3">
-          <button className="rounded-md bg-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-950 hover:bg-zinc-200" onClick={onClose}>Fechar</button>
-        </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

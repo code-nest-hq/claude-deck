@@ -1,5 +1,5 @@
-import { useEffect } from 'react';
 import { useApp } from '../../store';
+import { Modal } from '../../lib/Modal';
 
 const KEYS: [string, string][] = [
   ['Ctrl/Cmd + K', 'Palette: search sessions and actions'],
@@ -16,21 +16,13 @@ const KEYS: [string, string][] = [
 export function Shortcuts() {
   const setUi = useApp((s) => s.setUi);
   const close = () => setUi({ help: false });
-  useEffect(() => {
-    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
-    window.addEventListener('keydown', h);
-    return () => window.removeEventListener('keydown', h);
-  });
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={close}>
-      <div className="w-96 space-y-2 rounded-lg border border-zinc-700 bg-zinc-950 p-4" onClick={(e) => e.stopPropagation()}>
-        <h2 className="font-semibold">Shortcuts</h2>
-        <dl className="space-y-1 text-sm">
-          {KEYS.map(([k, d]) => (
-            <div key={k} className="flex gap-3"><dt className="w-40 shrink-0 font-mono text-xs text-zinc-300">{k}</dt><dd className="text-zinc-400">{d}</dd></div>
-          ))}
-        </dl>
-      </div>
-    </div>
+    <Modal size="md" onClose={close} title="Shortcuts">
+      <dl className="divide-y divide-zinc-800/70 text-sm">
+        {KEYS.map(([k, d]) => (
+          <div key={k} className="flex items-baseline gap-4 py-2.5"><dt className="w-44 shrink-0"><kbd className="rounded-md border border-zinc-800 bg-zinc-900 px-2 py-0.5 font-mono text-xs text-zinc-300">{k}</kbd></dt><dd className="text-zinc-400">{d}</dd></div>
+        ))}
+      </dl>
+    </Modal>
   );
 }

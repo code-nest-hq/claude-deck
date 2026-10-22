@@ -93,32 +93,32 @@ export function SearchModal({ placeholder, search, onClose }: { placeholder: str
   }, [q]); // eslint-disable-line react-hooks/exhaustive-deps -- `search` is rebuilt every render; only the text should retrigger
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 pt-[12vh] text-left font-sans" onClick={onClose}>
-      <div className="max-h-[76vh] w-[40rem] max-w-[calc(100vw-2rem)] overflow-auto rounded-lg border border-zinc-700 bg-zinc-950 p-4" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 p-4 pt-[12vh] text-left font-sans backdrop-blur-sm" onClick={onClose}>
+      <div className="layer max-h-[76vh] w-full max-w-2xl overflow-auto rounded-2xl border border-zinc-800 bg-zinc-950 p-5 shadow-[0_24px_60px_-20px_rgba(0,0,0,0.8)]" style={{ '--layer-from': '0px' } as React.CSSProperties} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-2">
           <input
             ref={input}
-            className="min-w-0 flex-1 rounded-md border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-100 outline-none focus:border-zinc-600"
+            className="min-w-0 flex-1 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3.5 py-2.5 text-sm text-zinc-100 outline-none transition-colors placeholder:text-zinc-600 focus:border-zinc-600"
             placeholder={placeholder}
             value={q}
             onChange={(e) => setQ(e.target.value)}
           />
-          <button className="text-xs text-zinc-500 hover:text-zinc-200" onClick={onClose}>Fechar</button>
+          <button className="rounded-md px-2 py-1.5 text-sm text-zinc-500 hover:text-zinc-200" onClick={onClose}>Fechar</button>
         </div>
         {q.trim() && (
-          <div className="mt-2 text-[11px] text-zinc-500">
+          <div className="mt-3 text-xs text-zinc-500">
             {err ? <span className="text-rose-300">{err}</span> : busy ? 'Pesquisando…' : rows.length === 0 ? 'Nenhum resultado' : `${rows.length >= MAX_HITS ? `${MAX_HITS}+` : rows.length} ${rows.length === 1 ? 'resultado' : 'resultados'}`}
           </div>
         )}
-        <ul className="mt-2 space-y-1">
+        <ul className="mt-3 space-y-2">
           {rows.slice(0, shown).map((h) => (
             <li key={h.key}>
-              <button className="block w-full rounded-md border border-zinc-800/70 bg-zinc-900/40 px-3 py-2 text-left hover:border-zinc-700 hover:bg-zinc-900" onClick={() => { onClose(); h.go(); }}>
-                <div className="flex gap-2 font-mono text-[10px] uppercase tracking-wider text-zinc-600">
+              <button className="block w-full rounded-xl border border-zinc-800/70 bg-zinc-900/40 px-4 py-3 text-left hover:border-zinc-700 hover:bg-zinc-900" onClick={() => { onClose(); h.go(); }}>
+                <div className="flex gap-2 font-mono text-[11px] uppercase tracking-wider text-zinc-600">
                   <span>{h.label}</span>
                   {h.session && <span className="min-w-0 truncate normal-case tracking-normal text-zinc-500">{h.session}</span>}
                 </div>
-                <div className="break-words text-xs text-zinc-300">
+                <div className="mt-1 break-words text-sm text-zinc-300">
                   {h.pre}<span className="underline decoration-[#c9a00c] decoration-2 underline-offset-2">{h.match}</span>{h.post}
                 </div>
               </button>
