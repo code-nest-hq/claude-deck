@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { Chat } from '../features/chat/Chat';
+import { PinnedBar } from '../features/home/PinnedBar';
 import { ActivityOverlay, Toasts } from '../features/home/Activity';
 import { Home, RemotePicker, ServerCatalog } from '../features/home/Home';
 import { LogsPage } from '../features/logs/LogsPage';
@@ -21,7 +22,7 @@ function Screen({ view }: { view: View }) {
     case 'server': return <ServerCatalog connectionId={view.connectionId} />;
     case 'project': return <ProjectHub projectId={view.projectId} />;
     case 'sessions': return <SessionsPage projectId={view.projectId} />;
-    case 'chat': return <Chat />;
+    case 'chat': return <div className="flex h-full flex-col"><Chat /></div>;
   }
 }
 
@@ -49,11 +50,12 @@ export function App() {
   if (tokenMissing) return <div className="p-8 text-zinc-300">Open the UI from the link printed in the terminal (<code>Code Nest: http://…/#token=…</code>).</div>;
   if (!config) return <div className="p-8 text-zinc-500">Loading…</div>;
   return (
-    <div className="h-screen overflow-hidden bg-zinc-950">
+    <div className="flex h-screen flex-col overflow-hidden bg-zinc-950">
+      <PinnedBar />
       {/* keyed by level: each one mounts as a fresh layer and slides in over the previous one */}
-      <div key={ui.profile ? 'profile' : ui.logs ? 'logs' : JSON.stringify(view)} className="layer h-screen" style={{ '--layer-from': `${16 * navDir}px` } as React.CSSProperties}>
-        {ui.profile ? <div className="flex h-screen flex-col"><ProfilePage onClose={() => setUi({ profile: false })} /></div>
-          : ui.logs ? <div className="flex h-screen flex-col"><LogsPage onClose={() => setUi({ logs: false })} /></div>
+      <div key={ui.profile ? 'profile' : ui.logs ? 'logs' : JSON.stringify(view)} className="layer min-h-0 flex-1" style={{ '--layer-from': `${16 * navDir}px` } as React.CSSProperties}>
+        {ui.profile ? <div className="flex h-full flex-col"><ProfilePage onClose={() => setUi({ profile: false })} /></div>
+          : ui.logs ? <div className="flex h-full flex-col"><LogsPage onClose={() => setUi({ logs: false })} /></div>
           : <Screen view={view} />}
       </div>
       <Toasts />
