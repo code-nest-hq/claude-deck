@@ -2,22 +2,23 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ModelUsage, SlashCommandInfo } from '@ccui/shared';
 import { fmtTokens } from '../../lib/format';
 import { useApp } from '../../store';
-import { IconArrowLeft, IconLock, IconPencil, IconSend, IconShuffle } from '../../lib/icons';
+import { IconArrowLeft, IconLock, IconPaperclip, IconSend, IconShuffle } from '../../lib/icons';
 import { ActivityPills } from '../home/Activity';
 import { AskUserQuestionModal, isAskUserQuestion } from './AskUserQuestionModal';
 import { AttachMenu } from './AttachMenu';
-import { AutoCompactModal } from './AutoCompactModal';
+import { AttachmentsModal, NO_ATTACHMENTS } from './AttachmentsModal';
+import { AutoCompactModal, ColdCacheModal, isColdCache } from './AutoCompactModal';
 import { HandoffModal } from './HandoffModal';
 import { CommandsPanel } from './CommandsPanel';
 import { GitBar } from './GitBar';
 import { Markdown } from './Markdown';
-import type { Item, SkillUse } from './reduce';
+import { liveTokens, type Item, type SkillUse } from './reduce';
 import { McpModal } from './McpModal';
 import { PluginsModal } from './PluginsModal';
 import { PastedChip, PastedModal } from './PastedModal';
 import { expandPastes, hasPasted, lineCount, splitPasted, pasteThreshold, pasteToken, TOKEN_SPLIT_RE, tokenAt } from './pasted';
-import { RichEditor } from './RichEditor';
 import { matchCommands, SlashMenu } from './SlashMenu';
+import { bulletize, fenceIfCode, insertBlock, insideFence, onEnter, toMarkdown } from './smartInput';
 import { ShellCard } from './ShellCard';
 import { SkillsModal } from './SkillsModal';
 import { BgTasksModal } from './BgTasksModal';
@@ -109,34 +110,20 @@ function TurnSummary({ modelUsage, skills, commands, bypass }: { modelUsage: Rec
   );
 }
 
-const NO_ATTACHMENTS: string[] = [];
-
 function AttachedFilesPill({ sessionId, connectionId }: { sessionId: string; connectionId: string }) {
-  // referência estável quando não há anexos: um array novo aqui faz o useSyncExternalStore do zustand nunca "assentar"
-  // (getSnapshot muda de identidade a cada chamada) -> loop infinito de re-render (React #185)
   const files = useApp((s) => s.attachments[sessionId] ?? NO_ATTACHMENTS);
-  const removeAttachment = useApp((s) => s.removeAttachment);
   const [open, setOpen] = useState(false);
-  if (files.length === 0) return null;
   return (
-    <div className="relative flex justify-end border-b border-zinc-800/60 px-2 py-1.5">
-      <button className="rounded-md border border-zinc-800/60 bg-zinc-900/50 px-2.5 py-1 font-mono text-xs text-zinc-400 hover:border-zinc-700" onClick={() => setOpen((o) => !o)}>
-        {files.length} {files.length === 1 ? 'arquivo' : 'arquivos'}
-      </button>
-      {open && (
-        <div className="absolute right-0 top-full mt-1 w-72 rounded-md border border-zinc-800 bg-zinc-900 p-2 shadow-xl" onMouseLeave={() => setOpen(false)}>
-          <ul className="mb-2 space-y-1">
-            {files.map((f) => (
-              <li key={f} className="flex items-center justify-between gap-2 rounded-sm bg-zinc-950/40 px-2 py-1 text-[11px] text-zinc-300">
-                <span className="min-w-0 flex-1 truncate font-mono">{f}</span>
-                <button className="shrink-0 text-zinc-500 hover:text-rose-400" onClick={() => removeAttachment(sessionId, f)}>✕</button>
-              </li>
-            ))}
-          </ul>
-          <AttachMenu sessionId={sessionId} connectionId={connectionId} />
+    <>
+      {files.length > 0 && (
+        <div className="flex justify-end border-b border-zinc-800/60 px-2 py-1.5">
+          <button className="inline-flex items-center gap-1.5 rounded-md border border-zinc-800/60 bg-zinc-900/50 px-2.5 py-1 font-mono text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:text-zinc-200" onClick={() => setOpen(true)}>
+            <IconPaperclip className="h-3 w-3" />{files.length} {files.length === 1 ? 'file' : 'files'}
+          </button>
         </div>
       )}
-    </div>
+      {open && <AttachmentsModal sessionId={sessionId} connectionId={connectionId} onClose={() => setOpen(false)} />}
+    </>
   );
 }
 
@@ -154,15 +141,13 @@ export function Chat() {
   const [usageOpen, setUsageOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [handoffOpen, setHandoffOpen] = useState(false);
+  const [cold, setCold] = useState(false); // a message is waiting on the cold-cache prompt (it stays in the input)
   const [bgOpen, setBgOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
   const [pluginsOpen, setPluginsOpen] = useState(false);
-  const [rich, setRich] = useState(false); // email-style input (pencil): Enter breaks line, Ctrl+Enter sends markdown
-  const [richMd, setRichMd] = useState('');
   const [pastes, setPastes] = useState<Record<number, string>>({}); // id -> text behind each "[Pasted text #id +N lines]" token
   const [pastedOpen, setPastedOpen] = useState<number>();
-  const [richKey, setRichKey] = useState(0); // remount = clear the editor
   const [stampsOff, setStampsOff] = useState<Record<string, boolean>>({}); // per session; timestamps are on by default
   const end = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
@@ -199,26 +184,38 @@ export function Chat() {
   const connState = status[connId] ?? 'up';
   const connLabel = config?.connections.find((c) => c.id === connId)?.label ?? connId;
   const t = chat.totals;
-  const allTokens = t.input + t.output + t.cacheCreation + t.cacheRead;
+  const inFlight = liveTokens(chat);
+  const allTokens = t.input + t.output + t.cacheCreation + t.cacheRead + inFlight;
   const openMcp = () => { setMcpOpen(true); mcp(); };
-  const submit = () => {
-    const raw = rich ? richMd : text;
-    const t = expandPastes(raw, pastes, !raw.trim().startsWith('!')).trim();
+  const submit = (skipCold = false) => {
+    const t = expandPastes(text.startsWith('!') ? text : toMarkdown(text), pastes, !text.trim().startsWith('!')).trim();
     if (!t || !up) return;
-    if (rich) { if (!busy) { send(t); setRichMd(''); setRichKey((k) => k + 1); } return; } // no "/" or "!" handling here: plain mode only
     // modo shell: "!comando" roda direto no diretório do projeto (não vai ao modelo)
     if (t.startsWith('!')) { const cmd = t.slice(1).trim(); if (cmd) { shell(cmd); setText(''); setPastes({}); } return; }
     // /mcp: interactive modal like the terminal's panel, instead of the CLI's one-line text summary (not sent to the model)
     if (t === '/mcp') { openMcp(); setText(''); return; }
     if (t === '/plugin' || t === '/plugins') { setPluginsOpen(true); setText(''); return; }
-    if (!busy) { send(t); setText(''); setPastes({}); }
+    if (busy) return;
+    if (project?.autoCompact && !/^\/compact(\s|$)/.test(t) && !skipCold && isColdCache(chat.context)) { setCold(true); return; }
+    send(t); setText(''); setPastes({});
   };
+  const sendCold = () => { setCold(false); submit(true); };
   const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    const pasted = e.clipboardData.getData('text');
-    const lines = lineCount(pasted);
-    if (lines < pasteThreshold()) return;
-    e.preventDefault();
+    let pasted = e.clipboardData.getData('text');
     const el = e.currentTarget;
+    // pasted code is fenced automatically (not in "!shell" / "/command" lines, and not when already inside a block)
+    const fenced = !/^[!/]/.test(text) && !insideFence(text, el.selectionStart) ? fenceIfCode(pasted) : null;
+    if (fenced) pasted = fenced;
+    const lines = lineCount(pasted);
+    if (lines < pasteThreshold()) {
+      if (!fenced) return;
+      e.preventDefault();
+      const r = insertBlock(text, el.selectionStart, el.selectionEnd, pasted);
+      setText(r.text);
+      setTimeout(() => el.setSelectionRange(r.caret, r.caret), 0);
+      return;
+    }
+    e.preventDefault();
     const id = Math.max(0, ...Object.keys(pastes).map(Number)) + 1;
     const tok = pasteToken(id, lines);
     const [a, b] = [el.selectionStart, el.selectionEnd];
@@ -246,6 +243,13 @@ export function Chat() {
       const exactNoArg = cur.name === query && !cur.argumentHint;
       if (e.key === 'Enter' && !e.shiftKey && !exactNoArg) { e.preventDefault(); pick(cur); return; }
     }
+    const el = e.currentTarget;
+    // Enter continues a list / opens a code block / stays a newline inside one; Ctrl+Enter always sends
+    if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.nativeEvent.isComposing && !bang && el.selectionStart === el.selectionEnd) {
+      if (insideFence(text, el.selectionStart)) return;
+      const r = onEnter(text, el.selectionStart);
+      if (r) { e.preventDefault(); setText(r.text); setTimeout(() => el.setSelectionRange(r.caret, r.caret), 0); return; }
+    }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
   };
 
@@ -261,7 +265,7 @@ export function Chat() {
           <button className="hidden items-center gap-2 rounded-md border border-zinc-800/60 bg-zinc-900/50 px-2.5 py-1 font-mono text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-900 sm:flex" title="Detailed usage (input, output, cache)" onClick={() => setUsageOpen(true)}>
             <span className="text-zinc-300">${chat.totals.costUsd.toFixed(4)}</span>
             <span className="text-zinc-600">·</span>
-            <span>{fmtTokens(allTokens)} tokens</span>
+            <span className={inFlight ? 'text-zinc-200' : ''}>{inFlight ? '~' : ''}{fmtTokens(allTokens)} tokens</span>
           </button>
           {!up && <span className="text-xs text-rose-400">disconnected…</span>}
           {busy && <button className="rounded-md border border-zinc-800 px-2.5 py-1 text-xs text-zinc-300 transition-colors hover:border-zinc-700 hover:bg-zinc-900" onClick={interrupt}>Pause</button>}
@@ -356,13 +360,13 @@ export function Chat() {
       {usageOpen && <UsageModal chat={chat} onClose={() => setUsageOpen(false)} />}
       {statusOpen && project && <StatusModal sessionId={active.sessionId} name={name} project={project} config={config} chat={chat} onClose={() => setStatusOpen(false)} />}
       <AutoCompactModal key={active.sessionId} sessionId={active.sessionId} chat={chat} enabled={!!project?.autoCompact} onCompact={() => send('/compact', false, 'auto-compact')} onDecline={compactDeclined} onHandoff={() => setHandoffOpen(true)} />
+      {cold && chat.context && <ColdCacheModal ctx={chat.context} onSend={sendCold} onCancel={() => setCold(false)} onCompact={() => { setCold(false); send('/compact', false, 'auto-compact'); }} onHandoff={() => { setCold(false); setHandoffOpen(true); }} />}
       {handoffOpen && <HandoffModal projectId={active.projectId} sessionId={active.sessionId} name={name} onClose={() => setHandoffOpen(false)} />}
 
       <div className="relative border-t border-zinc-800/70 bg-zinc-950 p-3">
         {menuOpen && <SlashMenu items={matches} sel={Math.min(sel, matches.length - 1)} lean={!!project?.lean} onPick={pick} onHover={setSel} />}
         <div className="flex flex-col rounded-xl border border-zinc-800 bg-zinc-900/90 transition-colors focus-within:border-zinc-700">
           <AttachedFilesPill sessionId={active.sessionId} connectionId={connId} />
-          {rich ? <RichEditor key={richKey} disabled={busy || !up} placeholder={busy ? 'Aguarde a resposta…' : 'Mensagem… (Enter quebra linha · Ctrl+Enter envia · "* " cria lista)'} onChange={setRichMd} onSend={submit} /> : (
           <div className="relative">
             {mirrored && (
               // mirror behind a transparent-text textarea, so only the command token (or "!" shell prefix) gets colored
@@ -377,22 +381,25 @@ export function Chat() {
             <textarea
               ref={input}
               className={`block min-h-20 max-h-[50vh] w-full resize-y rounded-t-xl bg-transparent p-3 text-sm outline-none [scrollbar-gutter:stable] placeholder:text-zinc-500 disabled:opacity-50 ${mirrored ? `relative text-transparent ${bang ? 'caret-zinc-900' : 'caret-zinc-100'}` : 'text-zinc-100'}`}
-              placeholder={busy ? 'Aguarde a resposta…' : 'Mensagem… ("/" comandos · "!" shell · Enter envia · Shift+Enter quebra linha)'}
+              placeholder={busy ? 'Aguarde a resposta…' : 'Mensagem… ("/" comandos · "!" shell · "- " lista · ``` código · Enter envia · Shift+Enter quebra linha)'}
               value={text}
               disabled={busy || !up}
-              onChange={(e) => { setText(e.target.value); setSel(0); setDismissed(false); }}
+              onChange={(e) => {
+                const el = e.currentTarget;
+                const b = (e.nativeEvent as InputEvent).data === ' ' && !el.value.startsWith('!') ? bulletize(el.value, el.selectionStart) : null;
+                setText(b ? b.text : el.value); setSel(0); setDismissed(false);
+                if (b) setTimeout(() => el.setSelectionRange(b.caret, b.caret), 0);
+              }}
               onScroll={(e) => { if (mirror.current) mirror.current.scrollTop = e.currentTarget.scrollTop; }}
               onKeyDown={onKeyDown}
               onPaste={onPaste}
               onClick={(e) => { const el = e.currentTarget; if (el.selectionStart === el.selectionEnd) { const id = tokenAt(text, el.selectionStart); if (id !== undefined && pastes[id] !== undefined) setPastedOpen(id); } }}
             />
           </div>
-          )}
           <div className="flex items-center px-1 py-1">
             <AttachMenu sessionId={active.sessionId} connectionId={connId} />
-            <button className={`ml-1 rounded-md p-1.5 transition-colors ${rich ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200'}`} title="Formatação (Ctrl+Enter envia)" onClick={() => { setRich((r) => !r); setRichMd(''); setRichKey((k) => k + 1); }}><IconPencil className="h-4 w-4" /></button>
             <span className="flex-1" />
-            <button className="rounded-md p-1.5 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100 disabled:opacity-40" title={rich ? 'Enviar (Ctrl+Enter)' : 'Enviar (Enter)'} disabled={busy || !up || !(rich ? richMd : text).trim()} onClick={submit}><IconSend className="h-4 w-4" /></button>
+            <button className="rounded-md p-1.5 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100 disabled:opacity-40" title="Enviar (Enter · Ctrl+Enter em listas e blocos de código)" disabled={busy || !up || !text.trim()} onClick={() => submit()}><IconSend className="h-4 w-4" /></button>
           </div>
         </div>
       </div>
