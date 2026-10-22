@@ -48,7 +48,16 @@ export function mapMessage(m: SDKMessage): EventBody[] {
     case 'stream_event': {
       if (taskId) return []; // sem streaming de texto de subagente (só as ferramentas que ele chama)
       const e = m.event;
-      return e.type === 'content_block_delta' && e.delta.type === 'text_delta' ? [{ type: 'message.delta', text: e.delta.text }] : [];
+      if (e.type === 'message_start') {
+        const u = e.message.usage;
+        return [{ type: 'turn.usage', phase: 'start', input: u.input_tokens ?? 0, output: u.output_tokens ?? 0, cacheCreation: u.cache_creation_input_tokens ?? 0, cacheRead: u.cache_read_input_tokens ?? 0 }];
+      }
+      if (e.type === 'message_delta') return [{ type: 'turn.usage', phase: 'end', output: e.usage.output_tokens ?? 0 }];
+      if (e.type !== 'content_block_delta') return [];
+      if (e.delta.type === 'text_delta') return [{ type: 'message.delta', text: e.delta.text }];
+      if (e.delta.type === 'thinking_delta') return [{ type: 'turn.progress', chars: e.delta.thinking.length }];
+      if (e.delta.type === 'input_json_delta') return [{ type: 'turn.progress', chars: e.delta.partial_json.length }];
+      return [];
     }
     case 'assistant': {
       const out: EventBody[] = [];

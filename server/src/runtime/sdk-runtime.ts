@@ -339,6 +339,7 @@ export class SdkRuntime implements ClaudeRuntime {
       prompt: input,
       options: {
         cwd, model: 'haiku', persistSession: false, maxTurns: 1,
+        tools: [], // text in, text out: without this every call ships the built-in tool schemas (~$0.014 per classification)
         systemPrompt: { type: 'custom', prompt: system },
         settingSources: [],
         spawnClaudeCodeProcess: (so) => this.transport.spawn(so, () => {}),

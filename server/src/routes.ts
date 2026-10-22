@@ -129,7 +129,7 @@ export function buildApi({ store, hub, conns }: Deps) {
     if (!p.startsWith('/') || /[\u0000-\u001f]/.test(p)) return bad(c, 'o caminho deve ser absoluto');
     if (!(await conns.get(b.connectionId).transport.isDirectory(p))) return bad(c, 'diretório não encontrado');
     if (projects().some((x) => x.connectionId === b.connectionId && x.path === p)) return c.json({ error: 'projeto já cadastrado' }, 409);
-    const created: Project = { id: randomUUID(), name: b.name, connectionId: b.connectionId, path: p, lean: b.lean, ...(b.color ? { color: b.color } : {}) };
+    const created: Project = { id: randomUUID(), name: b.name, connectionId: b.connectionId, path: p, lean: b.lean, autoCompact: true, ...(b.color ? { color: b.color } : {}) };
     projects().push(created);
     await store.projects.save();
     return c.json(created);
