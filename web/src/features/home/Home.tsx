@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { Project } from '@ccui/shared';
 import { api } from '../../api';
-import { IconPin, IconPlus, IconServer, IconSettings } from '../../lib/icons';
+import { IconPin, IconPlus, IconServer } from '../../lib/icons';
 import { projectColor } from '../../lib/projectColor';
 import { useApp } from '../../store';
 import { ProjectName } from '../projects/ProjectName';
@@ -66,9 +66,6 @@ export function Home() {
     <div className="flex h-full flex-col">
       <TopBar>
         <button className={barBtn} title="Shortcuts (?)" onClick={() => setUi({ help: true })}>?</button>
-        <button className={barBtn} onClick={() => setUi({ profile: true, logs: false })}>Profile</button>
-        <button className={barBtn} onClick={() => setUi({ logs: true, profile: false, logFilter: '' })}>Logs</button>
-        <button className={`${barBtn} flex items-center gap-1.5`} onClick={() => setUi({ appSettings: true })}><IconSettings className="h-3.5 w-3.5" /> Settings</button>
       </TopBar>
       <div className="min-h-0 flex-1 overflow-y-auto px-8 py-8">
         <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">Projects</h1>
