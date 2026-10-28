@@ -11,6 +11,33 @@ export const COMPACT_THRESHOLD = 60;
 // (the largest context seen in the logs was ~250k), so the percentage alone would never fire there.
 export const COMPACT_TOKENS = 150_000;
 
+// "Smart zone": the early part of the context where the model reasons best. `warn` = leaving it (consider a handoff),
+// `dumb` = past the compaction threshold above. Derived client-side from context.usage.
+export const ZONE_WARN_TOKENS = 80_000;
+export type ContextZone = 'smart' | 'warn' | 'dumb';
+export const contextZone = (ctx: { percentage: number; totalTokens: number }): ContextZone =>
+  ctx.percentage >= COMPACT_THRESHOLD || ctx.totalTokens >= COMPACT_TOKENS ? 'dumb' : ctx.totalTokens >= ZONE_WARN_TOKENS ? 'warn' : 'smart';
+
+const ZONE_UI: Record<ContextZone, { label: string; cls: string; tip: string }> = {
+  smart: { label: 'Smart zone', cls: 'border-emerald-500/30 text-emerald-300', tip: 'Context is still small: the model is at its sharpest.' },
+  warn: { label: 'Leaving smart zone', cls: 'border-amber-500/30 text-amber-300', tip: 'Context is growing and quality starts to drop. Click to start a new session with a handoff.' },
+  dumb: { label: 'Dumb zone', cls: 'border-rose-500/30 text-rose-300', tip: 'Context is large: quality degrades and every turn re-reads it all. Click to start a new session with a handoff.' },
+};
+
+export function ZoneBadge({ ctx, onHandoff }: { ctx: Chat['context']; onHandoff: () => void }) {
+  if (!ctx) return null;
+  const z = contextZone(ctx), u = ZONE_UI[z];
+  return (
+    <button
+      className={`hidden items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-colors hover:bg-zinc-900 sm:flex ${u.cls}`}
+      title={`${u.tip} (${Math.round(ctx.percentage)}% · ${fmtTokens(ctx.totalTokens)} tokens)`}
+      onClick={z === 'smart' ? undefined : onHandoff}
+    >
+      <span className="h-1.5 w-1.5 rounded-full bg-current" />{u.label}
+    </button>
+  );
+}
+
 // The prompt cache lasts 5 min: after a longer pause the next message re-reads the whole context uncached (~12x the
 // cached price). Below this size that is cents, not worth interrupting.
 export const COLD_CACHE_MS = 5 * 60_000;

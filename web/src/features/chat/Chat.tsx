@@ -7,7 +7,7 @@ import { ActivityPills } from '../home/Activity';
 import { AskUserQuestionModal, isAskUserQuestion } from './AskUserQuestionModal';
 import { AttachMenu } from './AttachMenu';
 import { AttachmentsModal, NO_ATTACHMENTS } from './AttachmentsModal';
-import { AutoCompactModal, ColdCacheModal, isColdCache } from './AutoCompactModal';
+import { AutoCompactModal, ColdCacheModal, ZoneBadge, isColdCache } from './AutoCompactModal';
 import { HandoffModal } from './HandoffModal';
 import { CommandsPanel } from './CommandsPanel';
 import { GitBar } from './GitBar';
@@ -261,6 +261,7 @@ export function Chat() {
           <h1 className="min-w-0 truncate text-sm tracking-tight text-zinc-600">{project?.name} / <span className="font-medium text-zinc-100">{name}</span></h1>
         </div>
         <div className="flex items-center gap-3">
+          <ZoneBadge ctx={chat.context} onHandoff={() => setHandoffOpen(true)} />
           <ActivityPills />
           <button className="hidden items-center gap-2 rounded-md border border-zinc-800/60 bg-zinc-900/50 px-2.5 py-1 font-mono text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-900 sm:flex" title="Detailed usage (input, output, cache)" onClick={() => setUsageOpen(true)}>
             <span className="text-zinc-300">${chat.totals.costUsd.toFixed(4)}</span>

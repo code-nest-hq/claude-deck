@@ -3,6 +3,7 @@ import type { Config, Project, SessionStatus } from '@ccui/shared';
 import { api } from '../../api';
 import { fmtTokens } from '../../lib/format';
 import { Modal } from '../../lib/Modal';
+import { contextZone } from './AutoCompactModal';
 import type { Chat } from './reduce';
 
 const MODEL_LABEL = { haiku: 'Haiku', sonnet: 'Sonnet 5' } as const;
@@ -45,7 +46,7 @@ export function StatusModal({ sessionId, name, project, config, chat, onClose }:
     ['Último uso', fmtDate(st.meta.lastUsedAt)],
   );
   rows.push(
-    ['Contexto', chat.context ? `${chat.context.percentage.toFixed(0)}% · ${fmtTokens(chat.context.totalTokens)} / ${fmtTokens(chat.context.maxTokens)}` : '— (após o próximo turno)'],
+    ['Contexto', chat.context ? `${chat.context.percentage.toFixed(0)}% · ${fmtTokens(chat.context.totalTokens)} / ${fmtTokens(chat.context.maxTokens)} · ${contextZone(chat.context)}` : '— (após o próximo turno)'],
     ['Tokens', `${fmtTokens(t.input + t.output + t.cacheCreation + t.cacheRead)} (entrada ${fmtTokens(t.input)} · saída ${fmtTokens(t.output)} · cache escrita ${fmtTokens(t.cacheCreation)} · cache leitura ${fmtTokens(t.cacheRead)})`],
     ['Custo estimado', `$${t.costUsd.toFixed(4)}`],
   );
