@@ -1,5 +1,7 @@
+import type { HandoffTrigger } from '@ccui/shared';
 import { parse } from './export';
 import { redactString } from './redact';
+import { recordSession } from './session-log';
 
 // "New session with handoff": a compact prompt that lets a fresh session continue the work of a long one, built from
 // the Claude Code transcript with no model call (the Haiku distillation is opt-in, see HANDOFF_SYSTEM_PROMPT).
@@ -86,4 +88,13 @@ export function buildHandoff(mainJsonl: string, purpose = ''): Handoff {
   // best effort: commands and requests in the transcript may carry tokens or keys
   const counts = {};
   return { text: redactString(lines.join('\n'), counts), recent: redactString(recent, counts) };
+}
+
+// Handoff traceability for the token audit: every enrich call costs money, and the two sessions need to find each other.
+export function recordHandoffGenerated(sessionId: string, r: { costUsd?: number; enriched?: boolean; ctxTokens?: number }): void {
+  recordSession(sessionId, 'handoff.generated', { costUsd: r.costUsd ?? 0, enriched: !!r.enriched, ctxTokens: r.ctxTokens ?? null });
+}
+export function recordHandoffLink(fromId: string, toId: string, trigger: HandoffTrigger | undefined, ctxTokens?: number): void {
+  recordSession(fromId, 'handoff.to', { sessionId: toId, trigger: trigger ?? null, ctxTokens: ctxTokens ?? null });
+  recordSession(toId, 'handoff.from', { sessionId: fromId, trigger: trigger ?? null });
 }

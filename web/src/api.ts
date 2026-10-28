@@ -1,4 +1,4 @@
-import type { Config, ConnStatus, Connection, DirEntry, Effort, GitInfo, HandoffResult, LogEntry, Model, PlanUsage, PluginAction, PluginActionResult, PluginsView, ProfileView, Project, ProjectHit, SessionRow, SessionStatus, SlashCommandInfo } from '@ccui/shared';
+import type { HandoffTrigger, Config, ConnStatus, Connection, DirEntry, Effort, GitInfo, HandoffResult, LogEntry, Model, PlanUsage, PluginAction, PluginActionResult, PluginsView, ProfileView, Project, ProjectHit, SessionRow, SessionStatus, SlashCommandInfo } from '@ccui/shared';
 
 const KEY = 'ccui-token';
 let token: string | null = null;
@@ -38,7 +38,7 @@ export const api = {
   patchProject: (id: string, b: Partial<Pick<Project, 'name' | 'lean' | 'routing' | 'bypass' | 'autoCompact' | 'model' | 'effort' | 'color' | 'pinned'>>) => req<Project>('PATCH', `/api/projects/${id}`, b),
   delProject: (id: string) => req<void>('DELETE', `/api/projects/${id}`),
   sessions: (pid: string) => req<SessionRow[]>('GET', `/api/projects/${pid}/sessions`),
-  newSession: (pid: string, b: { name: string; model?: Model; effort?: Effort; routing?: boolean }) => req<{ sessionId: string }>('POST', `/api/projects/${pid}/sessions`, b),
+  newSession: (pid: string, b: { name: string; model?: Model; effort?: Effort; routing?: boolean; handoffFrom?: string; trigger?: HandoffTrigger }) => req<{ sessionId: string }>('POST', `/api/projects/${pid}/sessions`, b),
   patchSession: (sid: string, projectId: string, b: { name?: string; favorite?: boolean; archived?: boolean; tags?: string[] }) => req<void>('PATCH', `/api/sessions/${sid}`, { projectId, ...b }),
   commands: (pid: string) => req<SlashCommandInfo[]>('GET', `/api/projects/${pid}/commands`),
   plugins: (pid: string) => req<PluginsView>('GET', `/api/projects/${pid}/plugins`),

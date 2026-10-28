@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { SessionStatus } from '@ccui/shared';
+import type { HandoffTrigger, SessionStatus } from '@ccui/shared';
 import { api } from '../../api';
 import { fmtTokens } from '../../lib/format';
 import { useApp } from '../../store';
@@ -7,9 +7,9 @@ import { Modal, ghost, primary } from '../../lib/Modal';
 
 // "Nova sessão com handoff": the prompt is built locally from the transcript (free); the Haiku checkbox adds a
 // distilled decisions/pending section (a few cents at most). The text stays editable before the new session starts.
-export function HandoffModal(props: { projectId: string; sessionId: string; name: string; onClose: () => void }) {
+export function HandoffModal(props: { projectId: string; sessionId: string; name: string; trigger: HandoffTrigger; onClose: () => void }) {
   // frozen at mount: opening the new session changes the active one while this modal is still closing
-  const [{ projectId, sessionId, name }] = useState(props);
+  const [{ projectId, sessionId, name, trigger }] = useState(props);
   const { onClose } = props;
   const { open, refreshRows, send } = useApp();
   const [enrich, setEnrich] = useState(false);
@@ -38,7 +38,7 @@ export function HandoffModal(props: { projectId: string; sessionId: string; name
     setCreating(true); setErr('');
     try {
       const st: SessionStatus = await api.sessionStatus(projectId, sessionId);
-      const s = await api.newSession(projectId, { name: `${name} (continuação)`.slice(0, 80), model: st.model, effort: st.effort, routing: st.routing });
+      const s = await api.newSession(projectId, { name: `${name} (continuação)`.slice(0, 80), model: st.model, effort: st.effort, routing: st.routing, handoffFrom: sessionId, trigger });
       await refreshRows(projectId);
       open(projectId, s.sessionId);
       send(text, false);

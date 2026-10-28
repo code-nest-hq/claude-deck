@@ -1,7 +1,7 @@
 // Fast, free checks (no Claude process, no tokens): `npm test`.
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, test } from 'node:test';
@@ -23,7 +23,10 @@ const { parseHistory, jsonlTimestamps, parseRemoteTranscript, FILE_MARK } = awai
 const { recordSession, readSessionLog, flushSessionLog } = await import('../src/session-log');
 const { redactString, redactDeep } = await import('../src/redact');
 const { buildExport } = await import('../src/export');
-const { buildHandoff } = await import('../src/handoff');
+const { buildSessionAudit, RATES, tokenCost, rateOf } = await import('../src/audit');
+const { verdicts, renderSummary, MIN_SAMPLE } = await import('../src/audit-verdict');
+const { slugify, auditDir, refreshSessionAudit, readAllAudits, markAnalyzed } = await import('../src/audit-store');
+const { buildHandoff, recordHandoffGenerated, recordHandoffLink } = await import('../src/handoff');
 const { onEnter, insideFence, fenceIfCode, insertBlock, bulletize, toMarkdown } = await import('../../web/src/features/chat/smartInput');
 const { loadPlugins, pluginArgs } = await import('../src/plugins');
 const { ROUTING_AGENTS, forbiddenModel, opusGate, OPUS_AGENT, SONNET_AGENT } = await import('../src/runtime/sdk-runtime');
@@ -407,6 +410,218 @@ describe('session log', () => {
     assert.equal(lines.find((l) => l.kind === 'routing.classified')?.source, 'heuristic');
     assert.equal(lines.find((l) => l.kind === 'process.open')?.resumed, undefined); // the fake has no resume notion
     assert.equal(lines.find((l) => l.kind === 'action')?.action, 'interrupt');
+  });
+  test('a compact heartbeat (status re-sent while compacting) is one compact, not several', async () => {
+    const rt = fakeRuntime({ classify: async () => 'haiku' });
+    const h = hubWith(rt);
+    await h.attach();
+    await h.hub.send(h.id, 'oi');
+    await h.waitFor((e) => e.type === 'turn.completed');
+    const out = rt.lives[0].out;
+    out.push({ type: 'compact', phase: 'started' });
+    out.push({ type: 'compact', phase: 'started' });
+    out.push({ type: 'compact', phase: 'done', preTokens: 100, postTokens: 10 });
+    out.push({ type: 'compact', phase: 'started' }); // a later compact still counts
+    await h.waitFor((e) => e.type === 'compact' && e.seq > 0 && e.phase === 'started' && e.seq > 6);
+    await flushSessionLog();
+    const phases = (await readSessionLog(h.id)).filter((l) => l.kind === 'compact').map((l) => l.phase);
+    assert.deepEqual(phases, ['started', 'done', 'started']);
+  });
+});
+
+describe('handoff traceability', () => {
+  test('handoff links are recorded in both session logs', async () => {
+    const a = randomUUID(); const b = randomUUID();
+    recordHandoffGenerated(a, { costUsd: 0.004, enriched: true, ctxTokens: 120_000 });
+    recordHandoffLink(a, b, 'cold-cache');
+    await flushSessionLog();
+    const la = await readSessionLog(a); const lb = await readSessionLog(b);
+    assert.equal(la.find((l) => l.kind === 'handoff.generated')?.costUsd, 0.004);
+    const to = la.find((l) => l.kind === 'handoff.to');
+    assert.equal(to?.sessionId, b); assert.equal(to?.trigger, 'cold-cache');
+    assert.equal(lb.find((l) => l.kind === 'handoff.from')?.sessionId, a);
+  });
+});
+
+describe('audit facts', () => {
+  type L = { ts: string; kind: string; [k: string]: unknown };
+  let n = 0;
+  const at = () => new Date(Date.UTC(2026, 9, 1, 12, 0, n++)).toISOString();
+  const line = (kind: string, f: Record<string, unknown> = {}): L => ({ ts: at(), kind, ...f });
+  const HAIKU = 'claude-haiku-4-5-20251001';
+  const usage = (cc = 0, cr = 0) => ({ input: 10, output: 20, cacheCreation: cc, cacheRead: cr });
+  const turn = (cost: number, cc = 0, model = HAIKU) => line('turn.completed', { modelUsage: { [model]: { ...usage(cc), costUsd: cost } } });
+  const meta = { sessionId: 's1', projectId: 'p1', projectName: 'P', logBytes: 1 };
+
+  test('compact heartbeats collapse into one compact', () => {
+    const a = buildSessionAudit([line('compact', { phase: 'started', by: 'deck-auto' }), line('compact', { phase: 'started', by: 'cli-auto' }), line('compact', { phase: 'started', by: 'cli-auto' }),
+      line('compact', { phase: 'done', preTokens: 62152, postTokens: 14114 })], meta);
+    assert.equal(a.compacts.length, 1);
+    assert.equal(a.compacts[0].by, 'deck-auto');
+    assert.equal(a.compacts[0].preTokens, 62152);
+    assert.equal(a.compacts[0].outcome, 'done');
+  });
+  test('failed compact counts as failed with zero cost', () => {
+    const a = buildSessionAudit([line('compact', { phase: 'started', by: 'cli-auto' }), line('compact', { phase: 'failed', message: 'limit' })], meta);
+    assert.equal(a.compacts[0].outcome, 'failed');
+    assert.equal(a.compacts[0].turnCostUsd, 0);
+    assert.equal(a.compacts[0].preTokens, null);
+  });
+  test('compact cost and turns after', () => {
+    const a = buildSessionAudit([line('compact', { phase: 'started', by: 'user' }), line('compact', { phase: 'done', preTokens: 100, postTokens: 10 }),
+      turn(0.5, 777), line('context.usage', { totalTokens: 10 }), turn(0.1), turn(0.1)], meta);
+    assert.equal(a.compacts[0].turnCostUsd, 0.5);
+    assert.equal(a.compacts[0].turnsAfter, 3);
+    assert.equal(a.compacts[0].nextTurnCacheCreation, 777);
+  });
+  test('routing pairs a verdict with the next turn', () => {
+    const a = buildSessionAudit([line('routing.classified', { model: 'haiku', source: 'haiku', costUsd: 0.004, durationMs: 5000 }), turn(0.02, 5)], meta);
+    assert.equal(a.routing[0].classifierCostUsd, 0.004);
+    assert.equal(a.routing[0].spent?.model, HAIKU);
+    assert.equal(a.routing[0].spent?.usage.cacheCreation, 5);
+  });
+  test('unknown model is unpriced, not an error', () => {
+    const a = buildSessionAudit([turn(0.1, 0, 'synthetic')], meta);
+    assert.equal(a.totals.unpricedTurns, 1);
+    assert.equal(a.totals.turns, 1);
+  });
+  test('empty log yields an empty audit', () => {
+    const a = buildSessionAudit([], meta);
+    assert.deepEqual([a.compacts, a.routing, a.handoff.generated, a.handoff.to], [[], [], [], []]);
+    assert.equal(a.totals.turns, 0);
+    assert.equal(a.totals.priceDrift, null);
+    assert.equal(a.analyzedAt, null);
+  });
+  test('priceDrift compares the table to the measured cost', () => {
+    const cost = tokenCost(RATES.haiku, usage(1000, 5000));
+    const a = buildSessionAudit([line('turn.completed', { modelUsage: { [HAIKU]: { ...usage(1000, 5000), costUsd: cost } } })], meta);
+    assert.ok(Math.abs(a.totals.priceDrift ?? 1) < 1e-9);
+    assert.equal(rateOf(HAIKU)?.family, 'haiku');
+    assert.equal(rateOf('synthetic'), null);
+  });
+  test('handoff lines are collected', () => {
+    const a = buildSessionAudit([line('handoff.from', { sessionId: 'old', trigger: 'zone-badge' }), line('context.usage', { totalTokens: 5000 }), turn(0.1, 4000), turn(0.1),
+      line('handoff.generated', { costUsd: 0.003, enriched: true, ctxTokens: 90000 }), line('handoff.to', { sessionId: 'new', trigger: null, ctxTokens: 80000 })], meta);
+    assert.deepEqual(a.handoff.from, { sessionId: 'old', trigger: 'zone-badge' });
+    assert.equal(a.handoff.to[0].sessionId, 'new');
+    assert.equal(a.handoff.to[0].ctxTokens, 80000);
+    assert.equal(a.handoff.generated[0].ctxTokens, 90000);
+    assert.equal(a.handoff.firstCtxTokens, 5000);
+    assert.equal(a.handoff.firstTurnCacheCreation, 4000);
+    assert.equal(a.handoff.turnsInSession, 2);
+  });
+  test('the report holds no message text', () => {
+    const a = buildSessionAudit([line('user.message', { text: 'SECRET-TEXT' }), line('tool.result', { output: 'SECRET-OUT' }), turn(0.1)], meta);
+    assert.ok(!JSON.stringify(a).includes('SECRET'));
+  });
+});
+
+describe('audit verdicts', () => {
+  const HAIKU = 'claude-haiku-4-5-20251001';
+  const mk = (o: Partial<import('../src/audit').SessionAudit> & { sessionId?: string } = {}): import('../src/audit').SessionAudit => ({
+    version: 1, sessionId: 's', projectId: 'p', projectName: 'P', analyzedAt: null, source: { logBytes: 1 },
+    totals: { turns: 0, costUsd: 0, unpricedTurns: 0, priceDrift: null }, compacts: [], routing: [],
+    handoff: { generated: [], from: null, to: [], firstTurnCacheCreation: null, firstCtxTokens: null, turnsInSession: 0 }, ...o,
+  });
+  const compact = (pre: number | null, post: number | null, turnsAfter: number, extra: object = {}) => ({
+    startedAt: 't', by: 'deck-auto' as const, outcome: 'done' as const, durationMs: 1000, preTokens: pre, postTokens: post, turnCostUsd: 0.05, nextTurnCacheCreation: post, model: HAIKU, turnsAfter, ...extra });
+  const times = <T,>(n: number, f: () => T) => Array.from({ length: n }, f);
+  const finite = (v: unknown): boolean => typeof v === 'number' ? Number.isFinite(v) : Array.isArray(v) ? v.every(finite) : v && typeof v === 'object' ? Object.values(v).every(finite) : true;
+
+  test('compact saves when many turns follow', () => {
+    const v = verdicts([mk({ compacts: times(MIN_SAMPLE, () => compact(100_000, 20_000, 41)) })]);
+    assert.equal(v.compact.verdict, 'saved');
+    assert.ok(v.compact.netUsd > 0);
+    assert.equal(v.compact.n, MIN_SAMPLE);
+  });
+  test('compact costs more when no turns follow', () => {
+    assert.equal(verdicts([mk({ compacts: times(MIN_SAMPLE, () => compact(100_000, 20_000, 1)) })]).compact.verdict, 'cost more');
+  });
+  test('compact with equal pre and post is a zero saving', () => {
+    const v = verdicts([mk({ compacts: times(MIN_SAMPLE, () => compact(50_000, 50_000, 10)) })]);
+    assert.equal(v.compact.savedUsd, 0);
+    assert.ok(finite(v));
+  });
+  test('failed compact is counted, not priced', () => {
+    const v = verdicts([mk({ compacts: [compact(null, null, 0, { outcome: 'failed', turnCostUsd: 0, model: null })] })]);
+    assert.equal(v.compact.failed, 1);
+    assert.equal(v.compact.n, 0);
+    assert.equal(v.compact.costUsd, 0);
+  });
+  test('fewer than MIN_SAMPLE is not enough data', () => {
+    assert.equal(verdicts([mk({ compacts: [compact(100_000, 20_000, 41)] })]).compact.verdict, 'not enough data');
+    assert.equal(verdicts([]).routing.verdict, 'not enough data');
+  });
+  test('routing: haiku turns save against the sonnet price, classifier cost subtracts', () => {
+    const usage = { input: 100, output: 200, cacheCreation: 1000, cacheRead: 5000, costUsd: 0.002 };
+    const r = { ts: 't', model: 'haiku' as const, source: 'haiku', classifierCostUsd: 0.004, durationMs: 100, spent: { model: HAIKU, usage } };
+    const fb = { ...r, source: 'fallback', model: 'sonnet' as const, spent: null };
+    const v = verdicts([mk({ routing: [...times(MIN_SAMPLE, () => r), fb] })]);
+    assert.ok(Math.abs(v.routing.savedUsd - MIN_SAMPLE * (tokenCost(RATES.sonnet, usage) - 0.002)) < 1e-12);
+    assert.ok(Math.abs(v.routing.costUsd - (MIN_SAMPLE + 1) * 0.004) < 1e-12);
+    assert.equal(v.routing.fallbackShare, 1 / (MIN_SAMPLE + 1));
+    assert.deepEqual(v.routing.bySource, { haiku: MIN_SAMPLE, fallback: 1 });
+  });
+  test('handoff break-even in turns, null when nothing is saved', () => {
+    const origin = mk({ sessionId: 'o', handoff: { generated: [{ ts: 't', costUsd: 0.003, enriched: true, ctxTokens: 150_000 }], from: null, to: [{ sessionId: 'n', trigger: 'zone-badge', ctxTokens: 150_000 }], firstTurnCacheCreation: null, firstCtxTokens: null, turnsInSession: 0 } });
+    const fresh = (ctx: number) => mk({ sessionId: 'n', handoff: { generated: [], from: { sessionId: 'o', trigger: 'zone-badge' }, to: [], firstTurnCacheCreation: 8000, firstCtxTokens: ctx, turnsInSession: 12 } });
+    const v = verdicts([origin, fresh(15_000)]);
+    const cost = 0.003 + 8000 * RATES.sonnet.cacheWrite / 1e6;
+    const perTurn = 135_000 * RATES.sonnet.cacheRead / 1e6;
+    assert.ok(Math.abs((v.handoff.breakEvenTurns ?? 0) - cost / perTurn) < 1e-9);
+    assert.equal(v.handoff.actualTurns, 12);
+    assert.equal(verdicts([origin, fresh(150_000)]).handoff.breakEvenTurns, null);
+  });
+  test('handoff quality is always not measured; unmatched origin is skipped', () => {
+    const lonely = mk({ handoff: { generated: [], from: { sessionId: 'gone', trigger: null }, to: [], firstTurnCacheCreation: 1, firstCtxTokens: 1, turnsInSession: 1 } });
+    const v = verdicts([lonely]);
+    assert.equal(v.handoff.quality, 'not measured');
+    assert.equal(v.handoff.n, 0);
+  });
+  test('renderSummary names the features and the caveats', () => {
+    const t = renderSummary(verdicts([mk()]));
+    for (const w of ['compact', 'routing', 'handoff', 'estimated', 'not measured']) assert.ok(t.toLowerCase().includes(w), w);
+  });
+});
+
+describe('audit store', () => {
+  test('slugify is path-safe', () => {
+    for (const bad of ['../../etc/passwd', 'a/b', '  ', '..', 'Meu Projeto!', '\u0000x']) {
+      const s = slugify(bad);
+      assert.match(s, /^[a-z0-9-]+$/, bad);
+      assert.ok(!s.includes('..') && !s.includes('/'), bad);
+    }
+    assert.equal(slugify('Meu Projeto!'), 'meu-projeto');
+    assert.equal(slugify('  '), 'project');
+    assert.ok(auditDir('../../x', 'sid').startsWith(path.join(process.env.CCUI_DATA_DIR!, 'audit')));
+  });
+  test('refreshSessionAudit writes, then skips while the log is unchanged', async () => {
+    const id = randomUUID(); const meta = { sessionId: id, projectId: 'p1', projectName: 'Store test' };
+    assert.equal(await refreshSessionAudit(meta), null); // no log yet
+    recordSession(id, 'turn.completed', { modelUsage: {} }); await flushSessionLog();
+    const first = await refreshSessionAudit(meta);
+    assert.equal(first?.totals.turns, 1);
+    const file = path.join(auditDir('Store test', id), 'audit.json');
+    assert.ok(existsSync(file));
+    await markAnalyzed([first!]);
+    const again = await refreshSessionAudit(meta);
+    assert.ok(again?.analyzedAt, 'kept analyzedAt while the log is unchanged');
+    recordSession(id, 'turn.completed', { modelUsage: {} }); await flushSessionLog();
+    const grown = await refreshSessionAudit(meta);
+    assert.equal(grown?.totals.turns, 2);
+    assert.equal(grown?.analyzedAt, null, 'a rebuilt report is new again');
+    assert.ok((await readAllAudits()).some((a) => a.sessionId === id));
+  });
+  test('markAnalyzed sets analyzedAt once', async () => {
+    const id = randomUUID(); const meta = { sessionId: id, projectId: 'p1', projectName: 'Mark test' };
+    recordSession(id, 'turn.completed', { modelUsage: {} }); await flushSessionLog();
+    const a = (await refreshSessionAudit(meta))!;
+    await markAnalyzed([a]);
+    const stamp = a.analyzedAt;
+    assert.ok(stamp);
+    await new Promise((r) => setTimeout(r, 5));
+    await markAnalyzed([a]);
+    assert.equal(a.analyzedAt, stamp);
   });
 });
 

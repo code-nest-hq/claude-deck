@@ -14,6 +14,7 @@ export interface Project { id: string; name: string; connectionId: string; path:
 export interface SessionMeta {
   sessionId: string; projectId: string; name?: string; model?: Model; effort?: Effort; routing?: boolean;
   tags?: string[]; favorite?: boolean; archived?: boolean; createdAt: number; lastUsedAt: number;
+  /** session this one was started from via "new session with handoff" */ handoffFrom?: string;
 }
 export interface Config {
   version: 1;
@@ -80,7 +81,10 @@ export interface PlanUsage {
 }
 export const createProfileBody =z.object({ name: name(80) });
 export const loginCodeBody = z.object({ code: z.string().trim().min(1).max(2048) });
-export const createSessionBody =z.object({ name: name(120), model: modelSchema.optional(), effort: effortSchema.optional(), routing: z.boolean().optional() });
+/** where the user started a handoff from (recorded for the token audit) */
+export const HANDOFF_TRIGGERS = ['zone-badge', 'auto-compact-modal', 'cold-cache'] as const;
+export type HandoffTrigger = (typeof HANDOFF_TRIGGERS)[number];
+export const createSessionBody =z.object({ name: name(120), model: modelSchema.optional(), effort: effortSchema.optional(), routing: z.boolean().optional(), handoffFrom: uuidSchema.optional(), trigger: z.enum(HANDOFF_TRIGGERS).optional() });
 const tag = z.string().trim().toLowerCase().min(1).max(30).regex(/^[\p{L}\p{N}_-]+$/u);
 export const patchSessionBody = z.object({
   projectId: z.string().min(1),

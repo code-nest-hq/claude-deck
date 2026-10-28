@@ -33,6 +33,7 @@ interface Entry {
   model?: Model; // model the live process runs on (set when routed); undefined = the spec's model
   ctxTokens?: number; // context size after the last turn (context.usage)
   turnEndedAt?: number; // when the last turn finished, to tell whether the prompt cache is still warm
+  compacting?: boolean; // a compact is in flight; the SDK re-sends status 'compacting' every ~30s, only the first counts
   compactBy?: 'user' | 'deck-auto'; // who asked for the /compact in flight; none when its 'started' arrives = the CLI's own auto-compact
 }
 
@@ -88,6 +89,7 @@ export class SessionHub {
   }
 
   isLive(id: string) { return !!this.entries.get(id)?.live; }
+  contextTokens(id: string) { return this.entries.get(id)?.ctxTokens; }
 
   private async snapshot(c: Client, id: string, e: Entry) {
     const rt = this.runtimeFor(id);
@@ -180,8 +182,6 @@ export class SessionHub {
     return 'ok';
   }
 
-  // `/mcp`: panel as an event (like shell); uses the live process when there is one, otherwise a short-lived one
-  async mcp(id: string, cardId?: string, action?: McpAction): Promise<'ok' | 'busy'> {
   // pending MCP sign-ins by OAuth `state`, so the browser's redirect to the Deck's callback route finds its session
   private mcpOAuth = new Map<string, { sessionId: string; server: string; cardId: string }>();
 
@@ -195,6 +195,8 @@ export class SessionHub {
     return p.server;
   }
 
+  // `/mcp`: panel as an event (like shell); uses the live process when there is one, otherwise a short-lived one
+  async mcp(id: string, cardId?: string, action?: McpAction): Promise<'ok' | 'busy'> {
     const spec = this.spec(id);
     const e = this.entry(id);
     if (e.mcpRunning) return 'busy';
@@ -203,14 +205,14 @@ export class SessionHub {
     const mid = cardId ?? randomUUID();
     this.emit(id, e, { type: 'mcp.status', id: mid });
     try {
-      const r = e.live ? await e.live.mcp(action) : await this.runtimeFor(id).mcp(spec.cwd, spec.lean, action);
-      this.emit(id, e, { type: 'mcp.status', id: mid, ...r });
       // the pending OAuth state lives in the Claude process: a short-lived one would drop it before the callback arrives
       if (action && !e.live && /^(auth|authCallback)$/.test(action.kind)) throw new Error('Send a message first so the session is running, then authenticate.');
-    } catch (err) {
+      const r = e.live ? await e.live.mcp(action) : await this.runtimeFor(id).mcp(spec.cwd, spec.lean, action);
       const authUrl = action?.kind === 'auth' ? r.servers.find((s) => s.name === action.server)?.authUrl : undefined;
       const state = authUrl && new URL(authUrl).searchParams.get('state');
       if (state && action) this.mcpOAuth.set(state, { sessionId: id, server: action.server, cardId: mid });
+      this.emit(id, e, { type: 'mcp.status', id: mid, ...r });
+    } catch (err) {
       this.emit(id, e, { type: 'mcp.status', id: mid, servers: [], error: (err as Error).message });
     } finally { e.mcpRunning = false; }
     return 'ok';
@@ -245,10 +247,15 @@ export class SessionHub {
   private async pump(id: string, e: Entry, live: LiveSession) {
     let crash: EventBody | null = null;
     for await (const b of live.events) {
+      if (b.type === 'compact') {
+        if (b.phase === 'started' && e.compacting) continue;
+        e.compacting = b.phase === 'started';
+      }
       const ev = this.emit(id, e, b);
       if (ev.type === 'error' && ev.code === 'exit') crash = ev;
     }
     e.live = null;
+    e.compacting = false;
     e.pending.clear();
     this.setState(id, e, 'exited');
     recordSession(id, 'process.exit', { crash: !!crash });

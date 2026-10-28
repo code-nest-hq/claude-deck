@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ModelUsage, SlashCommandInfo } from '@ccui/shared';
+import type { HandoffTrigger, ModelUsage, SlashCommandInfo } from '@ccui/shared';
 import { fmtTokens } from '../../lib/format';
 import { useApp } from '../../store';
 import { IconArrowLeft, IconLock, IconPaperclip, IconSend, IconShuffle } from '../../lib/icons';
@@ -140,7 +140,7 @@ export function Chat() {
   const [statusOpen, setStatusOpen] = useState(false);
   const [usageOpen, setUsageOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
-  const [handoffOpen, setHandoffOpen] = useState(false);
+  const [handoffTrigger, setHandoffTrigger] = useState<HandoffTrigger | null>(null);
   const [cold, setCold] = useState(false); // a message is waiting on the cold-cache prompt (it stays in the input)
   const [bgOpen, setBgOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -261,7 +261,7 @@ export function Chat() {
           <h1 className="min-w-0 truncate text-sm tracking-tight text-zinc-600">{project?.name} / <span className="font-medium text-zinc-100">{name}</span></h1>
         </div>
         <div className="flex items-center gap-3">
-          <ZoneBadge ctx={chat.context} onHandoff={() => setHandoffOpen(true)} />
+          <ZoneBadge ctx={chat.context} onHandoff={() => setHandoffTrigger('zone-badge')} />
           <ActivityPills />
           <button className="hidden items-center gap-2 rounded-md border border-zinc-800/60 bg-zinc-900/50 px-2.5 py-1 font-mono text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-900 sm:flex" title="Detailed usage (input, output, cache)" onClick={() => setUsageOpen(true)}>
             <span className="text-zinc-300">${chat.totals.costUsd.toFixed(4)}</span>
@@ -360,9 +360,9 @@ export function Chat() {
       {mcpOpen && <McpModal it={chat.items.findLast((x) => x.kind === 'mcp')} onClose={() => setMcpOpen(false)} />}
       {usageOpen && <UsageModal chat={chat} onClose={() => setUsageOpen(false)} />}
       {statusOpen && project && <StatusModal sessionId={active.sessionId} name={name} project={project} config={config} chat={chat} onClose={() => setStatusOpen(false)} />}
-      <AutoCompactModal key={active.sessionId} sessionId={active.sessionId} chat={chat} enabled={!!project?.autoCompact} onCompact={() => send('/compact', false, 'auto-compact')} onDecline={compactDeclined} onHandoff={() => setHandoffOpen(true)} />
-      {cold && chat.context && <ColdCacheModal ctx={chat.context} onSend={sendCold} onCancel={() => setCold(false)} onCompact={() => { setCold(false); send('/compact', false, 'auto-compact'); }} onHandoff={() => { setCold(false); setHandoffOpen(true); }} />}
-      {handoffOpen && <HandoffModal projectId={active.projectId} sessionId={active.sessionId} name={name} onClose={() => setHandoffOpen(false)} />}
+      <AutoCompactModal key={active.sessionId} sessionId={active.sessionId} chat={chat} enabled={!!project?.autoCompact} onCompact={() => send('/compact', false, 'auto-compact')} onDecline={compactDeclined} onHandoff={() => setHandoffTrigger('auto-compact-modal')} />
+      {cold && chat.context && <ColdCacheModal ctx={chat.context} onSend={sendCold} onCancel={() => setCold(false)} onCompact={() => { setCold(false); send('/compact', false, 'auto-compact'); }} onHandoff={() => { setCold(false); setHandoffTrigger('cold-cache'); }} />}
+      {handoffTrigger && <HandoffModal projectId={active.projectId} sessionId={active.sessionId} name={name} trigger={handoffTrigger} onClose={() => setHandoffTrigger(null)} />}
 
       <div className="relative border-t border-zinc-800/70 bg-zinc-950 p-3">
         {menuOpen && <SlashMenu items={matches} sel={Math.min(sel, matches.length - 1)} lean={!!project?.lean} onPick={pick} onHover={setSel} />}
