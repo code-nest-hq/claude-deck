@@ -13,6 +13,9 @@ export function HandoffModal(props: { projectId: string; sessionId: string; name
   const { onClose } = props;
   const { open, refreshRows, send } = useApp();
   const [enrich, setEnrich] = useState(false);
+  const [purpose, setPurpose] = useState('');
+  const [debounced, setDebounced] = useState('');
+  useEffect(() => { const t = setTimeout(() => setDebounced(purpose), 500); return () => clearTimeout(t); }, [purpose]);
   const [text, setText] = useState('');
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
@@ -22,14 +25,14 @@ export function HandoffModal(props: { projectId: string; sessionId: string; name
   useEffect(() => {
     let live = true;
     setLoading(true); setErr(''); setNote('');
-    api.handoff(projectId, sessionId, enrich).then((r) => {
+    api.handoff(projectId, sessionId, enrich, debounced).then((r) => {
       if (!live) return;
       setText(r.text);
       if (r.error) setNote(`Haiku falhou (${r.error}); usando só o handoff local.`);
       else if (r.costUsd !== undefined) setNote(`Haiku: US$ ${r.costUsd.toFixed(4)}`);
     }, (e: Error) => live && setErr(e.message)).finally(() => live && setLoading(false));
     return () => { live = false; };
-  }, [projectId, sessionId, enrich]);
+  }, [projectId, sessionId, enrich, debounced]);
 
   const create = async () => {
     setCreating(true); setErr('');
@@ -52,6 +55,10 @@ export function HandoffModal(props: { projectId: string; sessionId: string; name
         <button className={primary} disabled={loading || creating || !text.trim()} onClick={() => void create()}>{creating ? 'Criando…' : 'Iniciar sessão'}</button>
       </>}
     >
+      <input
+        className="mb-4 w-full rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-sm text-zinc-200 outline-none transition-colors focus:border-zinc-600"
+        placeholder="Propósito da próxima sessão (opcional)" value={purpose} maxLength={500} disabled={creating} onChange={(e) => setPurpose(e.target.value)}
+      />
       <label className="flex items-center gap-2.5 text-sm text-zinc-200">
         <input type="checkbox" className="h-4 w-4" checked={enrich} disabled={loading || creating} onChange={(e) => setEnrich(e.target.checked)} /> Enriquecer com Haiku (decisões e pendências)
       </label>

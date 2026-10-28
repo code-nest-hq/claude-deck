@@ -307,7 +307,7 @@ export function buildApi({ store, hub, conns }: Deps) {
     const { cwd } = openSpecFor(store, meta.sessionId);
     const transcript = await transport.readTranscript(meta.sessionId, cwd).catch(() => null);
     if (!transcript) return c.json({ error: 'transcrição da sessão não encontrada' }, 404);
-    const h = buildHandoff(transcript.main);
+    const h = buildHandoff(transcript.main, c.req.query('purpose') ?? '');
     if (c.req.query('enrich') !== '1') return c.json({ text: h.text } satisfies HandoffResult);
     try {
       const n = await runtime.handoffNotes(cwd, `${h.text}\n\n## Recent assistant messages\n${h.recent}`);

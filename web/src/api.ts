@@ -52,7 +52,7 @@ export const api = {
     if (!r.ok) throw new Error((await r.json().catch(() => null))?.error ?? `HTTP ${r.status}`);
     return { blob: await r.blob(), filename: /filename="([^"]+)"/.exec(r.headers.get('Content-Disposition') ?? '')?.[1] ?? 'session.jsonl' };
   },
-  handoff: (pid: string, sid: string, enrich: boolean) => req<HandoffResult>('GET', `/api/projects/${pid}/sessions/${sid}/handoff${enrich ? '?enrich=1' : ''}`),
+  handoff: (pid: string, sid: string, enrich: boolean, purpose: string) => req<HandoffResult>('GET', `/api/projects/${pid}/sessions/${sid}/handoff?${new URLSearchParams({ ...(enrich && { enrich: '1' }), purpose })}`),
   sessionStatus: (pid: string, sid: string) => req<SessionStatus>('GET', `/api/projects/${pid}/sessions/${sid}/status`),
   git: (pid: string) => req<GitInfo | null>('GET', `/api/projects/${pid}/git`),
   logs: (day?: string) => req<{ day: string; days: string[]; entries: LogEntry[] }>('GET', `/api/logs${day ? `?day=${day}` : ''}`),

@@ -582,6 +582,19 @@ describe('session handoff', () => {
     assert.match(text, /Tests added; docs are next\.$/);
     assert.match(recent, /Plan: edit the modal\./);
   });
+  test('lists referenced docs, redacts secrets and adds the purpose', () => {
+    const j = [
+      line({ type: 'user', message: { content: 'deploy with API_KEY=sk-ant-abcdefghijklmnopqrstuvwxyz0123' } }),
+      line({ type: 'assistant', message: { content: [
+        { type: 'tool_use', name: 'Read', input: { file_path: '/p/docs/superpowers/specs/x.md' } },
+        { type: 'tool_use', name: 'Read', input: { file_path: '/p/src/a.ts' } },
+      ] } }),
+    ].join('\n');
+    const { text } = buildHandoff(j, 'finish the docs');
+    assert.match(text, /## Purpose of this session\nfinish the docs/);
+    assert.match(text, /## Referenced docs[^\n]*\n- \/p\/docs\/superpowers\/specs\/x\.md\n/);
+    assert.doesNotMatch(text, /sk-ant-abcdefghijklmnopqrstuvwxyz0123/);
+  });
   test('empty transcript still yields a usable prompt', () => {
     assert.match(buildHandoff('').text, /## Original goal\n\(none\)/);
   });
