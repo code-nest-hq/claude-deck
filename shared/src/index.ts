@@ -10,10 +10,11 @@ export const uuidSchema = z.string().uuid();
 
 export interface Connection { id: string; kind: 'local' | 'ssh'; target?: string; label: string; claudePath?: string }
 export type ConnStatus = 'up' | 'down' | 'reconnecting';
-export interface Project { id: string; name: string; connectionId: string; path: string; lean: boolean; routing?: boolean; bypass?: boolean; autoCompact?: boolean; model?: Model; effort?: Effort; /** accent hex (#rrggbb) shown on the project card */ color?: string }
+export interface Project { id: string; name: string; connectionId: string; path: string; lean: boolean; routing?: boolean; bypass?: boolean; autoCompact?: boolean; model?: Model; effort?: Effort; /** accent hex (#rrggbb) shown on the project card */ color?: string; /** shown in the always-visible pinned bar */ pinned?: boolean }
 export interface SessionMeta {
   sessionId: string; projectId: string; name?: string; model?: Model; effort?: Effort; routing?: boolean;
   tags?: string[]; favorite?: boolean; archived?: boolean; createdAt: number; lastUsedAt: number;
+  /** session this one was started from via "new session with handoff" */ handoffFrom?: string;
 }
 export interface Config {
   version: 1;
@@ -50,7 +51,7 @@ const name = (max: number) => z.string().trim().min(1).max(max);
 const colorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/);
 export const createProjectBody = z.object({ name: name(80), path: z.string().min(1).max(1024), lean: z.boolean().default(false), connectionId: z.string().min(1).default('local'), color: colorSchema.optional() });
 export const createConnectionBody = z.object({ target: z.string().min(1).max(255), label: name(80).optional(), claudePath: z.string().max(255).optional() });
-export const patchProjectBody = z.object({ name: name(80).optional(), lean: z.boolean().optional(), routing: z.boolean().optional(), bypass: z.boolean().optional(), autoCompact: z.boolean().optional(), model: modelSchema.optional(), effort: effortSchema.optional(), color: colorSchema.optional() });
+export const patchProjectBody = z.object({ name: name(80).optional(), lean: z.boolean().optional(), routing: z.boolean().optional(), bypass: z.boolean().optional(), autoCompact: z.boolean().optional(), model: modelSchema.optional(), effort: effortSchema.optional(), color: colorSchema.optional(), pinned: z.boolean().optional() });
 export const patchConfigBody = z.object({ model: modelSchema.optional(), effort: effortSchema.optional() })
   .refine((b) => b.model !== undefined || b.effort !== undefined, { message: 'nada para alterar' });
 /** plan rate-limit window: utilization 0-100, resets_at ISO 8601 */
@@ -80,7 +81,10 @@ export interface PlanUsage {
 }
 export const createProfileBody =z.object({ name: name(80) });
 export const loginCodeBody = z.object({ code: z.string().trim().min(1).max(2048) });
-export const createSessionBody =z.object({ name: name(120), model: modelSchema.optional(), effort: effortSchema.optional(), routing: z.boolean().optional() });
+/** where the user started a handoff from (recorded for the token audit) */
+export const HANDOFF_TRIGGERS = ['zone-badge', 'auto-compact-modal', 'cold-cache'] as const;
+export type HandoffTrigger = (typeof HANDOFF_TRIGGERS)[number];
+export const createSessionBody =z.object({ name: name(120), model: modelSchema.optional(), effort: effortSchema.optional(), routing: z.boolean().optional(), handoffFrom: uuidSchema.optional(), trigger: z.enum(HANDOFF_TRIGGERS).optional() });
 const tag = z.string().trim().toLowerCase().min(1).max(30).regex(/^[\p{L}\p{N}_-]+$/u);
 export const patchSessionBody = z.object({
   projectId: z.string().min(1),
@@ -104,6 +108,10 @@ export type EventBody =
   | { type: 'user.message'; text: string }
   | { type: 'message.delta'; text: string }
   | { type: 'message.completed'; text: string }
+  // live token meter while a turn runs: one API message at a time ('start' carries its input side, 'end' the exact output);
+  // 'turn.progress' = characters streamed since (thinking / tool input), used to estimate output between the two
+  | { type: 'turn.usage'; phase: 'start' | 'end'; input?: number; output: number; cacheCreation?: number; cacheRead?: number }
+  | { type: 'turn.progress'; chars: number }
   | { type: 'tool.started'; toolUseId: string; name: string; input: unknown; taskId?: string }
   | { type: 'tool.result'; toolUseId: string; output: string; isError: boolean; taskId?: string }
   // subagente (Task tool): taskId = tool_use_id do Task tool. Só 1º nível vira aba no cliente.
@@ -137,9 +145,14 @@ export type McpStatus = 'connected' | 'failed' | 'needs-auth' | 'pending' | 'dis
 // what the terminal's /mcp shows; never env/headers (may carry secrets)
 export interface McpServerView {
   name: string; status: McpStatus; scope?: string; transport?: string; target?: string; error?: string;
-  serverInfo?: { name: string; version: string }; tools: Array<{ name: string; description?: string }>;
+  serverInfo?: { name: string; version: string }; authUrl?: string; tools: Array<{ name: string; description?: string }>;
 }
-export const mcpActionSchema = z.object({ kind: z.enum(['reconnect', 'enable', 'disable']), server: z.string().min(1).max(200) });
+export const mcpActionSchema = z.object({
+  kind: z.enum(['reconnect', 'enable', 'disable', 'auth', 'authCallback', 'clearAuth']),
+  server: z.string().min(1).max(200),
+  redirectUri: z.string().max(500).optional(), // 'auth' only: set by the server (the Deck's own callback route), whatever the client sends is overwritten
+  callbackUrl: z.string().max(4000).optional(), // only for 'authCallback': the URL the browser was redirected to after sign-in
+});
 export type McpAction = z.infer<typeof mcpActionSchema>;
 
 // `/plugin` panel: the terminal's `claude plugin …` run on the project's machine (local or SSH)

@@ -24,7 +24,7 @@ export function SessionsPage({ projectId }: { projectId: string }) {
     </section>
   );
   return (
-    <div className="flex h-screen flex-col">
+    <div className="flex h-full flex-col">
       <TopBar back={p.name} crumb="Sessions">
         <button className={barBtnPrimary} onClick={() => setUi({ newSession: true, newFor: p.id })}><IconPlus className="h-3.5 w-3.5" /> New session</button>
       </TopBar>

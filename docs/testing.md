@@ -44,6 +44,7 @@ When changing anything in `web/src/features/*` or the event protocol (`shared/sr
 - Plugins modal (`/plugin` or header button): Installed matches `claude plugin list`; Enable/Disable/Update/Uninstall, Install from Discover (each scope) and marketplace add/update/remove show the CLI output and refresh the list; works on an SSH project.
 - Session export: the "Exportar" button downloads a `.jsonl` whose first line is the manifest; with the mask on, no known secret shows up; a session with subagents lists them in `sources.subagents`; an SSH session exports too; auto-compact accept/decline show up as `compact.requested`/`compact.declined` in the Deck lines.
 - Composer: `/command` coloring (blue/red), `!` highlight, resize, and blocked commands (`/clear`, `/model`…) show the explanation instead of being sent.
+- Token audit: archiving a session creates `~/.code-nest/audit/<project>/<sessionId>/audit.json`; `npm run audit` (free, no Claude process) prints a verdict per feature, and its rate-table drift stays under ~5% (otherwise re-fit `RATES` in `server/src/audit.ts`). After a handoff, both session logs carry `handoff.to`/`handoff.from`.
 
 ## Current limitation
 

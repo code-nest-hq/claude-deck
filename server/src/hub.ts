@@ -6,6 +6,10 @@ import type { Classification, ClaudeRuntime, LiveSession, OpenOptions } from './
 
 const BUFFER = 2000;
 const INTERRUPT_GRACE_MS = 5000;
+// Switching model drops the prompt cache (it is per model): the first turn after a warm Sonnet -> Haiku switch rewrote ~66k tokens
+// of context. Past this size, while the cache is still warm, a downgrade costs more than Haiku saves, so the session stays put.
+export const STICKY_CTX_TOKENS = 30_000;
+export const CACHE_TTL_MS = 5 * 60_000;
 
 export interface Client { send(m: ServerMsg): void; sessions: Set<string> }
 export type OpenSpec = Omit<OpenOptions, 'sessionId'>;
@@ -26,6 +30,10 @@ interface Entry {
   // o delta calculado é o acumulado inteiro, não só o turno — aceitável, é só o resumo exibido no terminal
   prevModelUsage: Record<string, ModelUsage> | null;
   bgTasks: BgTask[]; // last bg.tasks list, sent in the snapshot
+  model?: Model; // model the live process runs on (set when routed); undefined = the spec's model
+  ctxTokens?: number; // context size after the last turn (context.usage)
+  turnEndedAt?: number; // when the last turn finished, to tell whether the prompt cache is still warm
+  compacting?: boolean; // a compact is in flight; the SDK re-sends status 'compacting' every ~30s, only the first counts
   compactBy?: 'user' | 'deck-auto'; // who asked for the /compact in flight; none when its 'started' arrives = the CLI's own auto-compact
 }
 
@@ -81,6 +89,7 @@ export class SessionHub {
   }
 
   isLive(id: string) { return !!this.entries.get(id)?.live; }
+  contextTokens(id: string) { return this.entries.get(id)?.ctxTokens; }
 
   private async snapshot(c: Client, id: string, e: Entry) {
     const rt = this.runtimeFor(id);
@@ -125,7 +134,11 @@ export class SessionHub {
     // so nothing may hold on to e.live across that await
     // `/compact` keeps the session's current model: no classifier call, and the summary isn't downgraded to Haiku
     let model: Model | undefined;
-    if (spec.routing && !isCompact) {
+    // sticky: on Sonnet with a big, warm context no verdict can help (a downgrade would rebuild the cache), so skip the classifier too
+    const current = e.live ? e.model ?? spec.model : spec.model;
+    const sticky = current === 'sonnet' && (e.ctxTokens ?? 0) > STICKY_CTX_TOKENS && Date.now() - (e.turnEndedAt ?? 0) < CACHE_TTL_MS;
+    if (sticky && spec.routing && !isCompact) recordSession(id, 'routing.sticky', { ctxTokens: e.ctxTokens });
+    if (spec.routing && !isCompact && !sticky) {
       this.emit(id, e, { type: 'routing.started' });
       const c: Classification = await this.runtimeFor(id).classify(spec.cwd, text).catch((): Classification => ({ model: 'sonnet', source: 'fallback', durationMs: 0 }));
       model = c.model;
@@ -145,6 +158,7 @@ export class SessionHub {
     const live = e.live;
     if (model) {
       await live.setModel(model).catch(() => {});
+      e.model = model;
       this.emit(id, e, { type: 'model.routed', model });
     }
     this.emit(id, e, { type: 'user.message', text });
@@ -168,17 +182,35 @@ export class SessionHub {
     return 'ok';
   }
 
+  // pending MCP sign-ins by OAuth `state`, so the browser's redirect to the Deck's callback route finds its session
+  private mcpOAuth = new Map<string, { sessionId: string; server: string; cardId: string }>();
+
+  // GET /mcp-oauth/callback: finishes the sign-in with the URL the provider redirected the browser to
+  async mcpOAuthCallback(url: URL): Promise<string | null> {
+    const state = url.searchParams.get('state') ?? '';
+    const p = this.mcpOAuth.get(state);
+    if (!p) return null;
+    this.mcpOAuth.delete(state);
+    await this.mcp(p.sessionId, p.cardId, { kind: 'authCallback', server: p.server, callbackUrl: url.toString() });
+    return p.server;
+  }
+
   // `/mcp`: panel as an event (like shell); uses the live process when there is one, otherwise a short-lived one
   async mcp(id: string, cardId?: string, action?: McpAction): Promise<'ok' | 'busy'> {
     const spec = this.spec(id);
     const e = this.entry(id);
     if (e.mcpRunning) return 'busy';
     e.mcpRunning = true;
-    if (action) recordSession(id, 'action', { action: 'mcp', mcpAction: action });
+    if (action) recordSession(id, 'action', { action: 'mcp', mcpAction: { ...action, callbackUrl: action.callbackUrl && '[redacted]' } });
     const mid = cardId ?? randomUUID();
     this.emit(id, e, { type: 'mcp.status', id: mid });
     try {
+      // the pending OAuth state lives in the Claude process: a short-lived one would drop it before the callback arrives
+      if (action && !e.live && /^(auth|authCallback)$/.test(action.kind)) throw new Error('Send a message first so the session is running, then authenticate.');
       const r = e.live ? await e.live.mcp(action) : await this.runtimeFor(id).mcp(spec.cwd, spec.lean, action);
+      const authUrl = action?.kind === 'auth' ? r.servers.find((s) => s.name === action.server)?.authUrl : undefined;
+      const state = authUrl && new URL(authUrl).searchParams.get('state');
+      if (state && action) this.mcpOAuth.set(state, { sessionId: id, server: action.server, cardId: mid });
       this.emit(id, e, { type: 'mcp.status', id: mid, ...r });
     } catch (err) {
       this.emit(id, e, { type: 'mcp.status', id: mid, servers: [], error: (err as Error).message });
@@ -215,10 +247,15 @@ export class SessionHub {
   private async pump(id: string, e: Entry, live: LiveSession) {
     let crash: EventBody | null = null;
     for await (const b of live.events) {
+      if (b.type === 'compact') {
+        if (b.phase === 'started' && e.compacting) continue;
+        e.compacting = b.phase === 'started';
+      }
       const ev = this.emit(id, e, b);
       if (ev.type === 'error' && ev.code === 'exit') crash = ev;
     }
     e.live = null;
+    e.compacting = false;
     e.pending.clear();
     this.setState(id, e, 'exited');
     recordSession(id, 'process.exit', { crash: !!crash });
@@ -272,7 +309,7 @@ export class SessionHub {
   private logSessionError(id: string, e: Entry, body: Extract<EventBody, { type: 'error' }>): string {
     let spec: OpenSpec | undefined;
     try { spec = this.spec(id); } catch { /* unknown session */ }
-    const recent = e.buffer.filter((x) => x.type !== 'message.delta').slice(-20)
+    const recent = e.buffer.filter((x) => x.type !== 'message.delta' && x.type !== 'turn.progress' && x.type !== 'turn.usage').slice(-20)
       .map((x) => ({ seq: x.seq, ts: new Date(x.ts).toISOString(), type: x.type, ...summary(x) }));
     return logError({
       level: 'error', source: 'session', code: body.code, message: body.message, sessionId: id, ...this.label(id),
@@ -290,7 +327,7 @@ export class SessionHub {
     const ev = { ...body, sessionId: id, seq: ++e.seq, ts: Date.now() } as ClaudeEvent;
     e.buffer.push(ev);
     if (e.buffer.length > BUFFER) e.buffer.shift();
-    if (body.type !== 'message.delta') { // the transcript has the streamed text; everything else is the app's own view
+    if (body.type !== 'message.delta' && body.type !== 'turn.progress' && body.type !== 'turn.usage') { // the transcript has the streamed text; everything else is the app's own view
       const { type, ...fields } = body;
       const by = body.type === 'compact' && body.phase === 'started' ? { by: e.compactBy ?? 'cli-auto' } : {};
       recordSession(id, type, { seq: ev.seq, ...fields, ...by }, ev.ts);
@@ -315,7 +352,11 @@ export class SessionHub {
       case 'bg.tasks':
         e.bgTasks = body.tasks;
         break;
+      case 'context.usage':
+        e.ctxTokens = body.totalTokens;
+        break;
       case 'turn.completed':
+        e.turnEndedAt = Date.now();
         e.totals = body.totals;
         this.setState(id, e, 'idle');
         break;

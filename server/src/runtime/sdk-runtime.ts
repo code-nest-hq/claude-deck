@@ -74,11 +74,23 @@ function mcpView(s: McpServerStatus): McpServerView {
   };
 }
 
+// MCP OAuth control requests: implemented by the SDK at runtime but missing from its public typings
+interface McpAuthApi {
+  mcpAuthenticate(server: string, redirectUri?: string): Promise<{ authUrl?: string } | undefined>;
+  mcpSubmitOAuthCallbackUrl(server: string, callbackUrl: string): Promise<unknown>;
+  mcpClearAuth(server: string): Promise<unknown>;
+}
+
 // same data the terminal's /mcp shows; waits for servers still connecting (like the terminal's spinner)
 async function mcpStatus(q: Query, action?: McpAction): Promise<{ servers: McpServerView[]; error?: string }> {
   let error: string | undefined;
+  let authUrl: string | undefined;
   try {
+    const auth = q as unknown as McpAuthApi;
     if (action?.kind === 'reconnect') await q.reconnectMcpServer(action.server);
+    else if (action?.kind === 'auth') authUrl = (await auth.mcpAuthenticate(action.server, action.redirectUri))?.authUrl;
+    else if (action?.kind === 'authCallback') await auth.mcpSubmitOAuthCallbackUrl(action.server, action.callbackUrl ?? '');
+    else if (action?.kind === 'clearAuth') await auth.mcpClearAuth(action.server);
     else if (action) await q.toggleMcpServer(action.server, action.kind === 'enable');
   } catch (e) { error = (e as Error).message; }
   const until = Date.now() + MCP_WAIT_MS;
@@ -89,6 +101,8 @@ async function mcpStatus(q: Query, action?: McpAction): Promise<{ servers: McpSe
   }
   // hides the UI's own in-process server (Model Routing), which the terminal never shows
   const servers = list.filter((s) => s.source !== 'sdk' && s.config?.type !== 'sdk').map(mcpView);
+  if (authUrl) servers.forEach((s) => { if (s.name === action?.server) s.authUrl = authUrl; });
+  else if (action?.kind === 'auth' && !error) error = 'The server did not return a sign-in URL.';
   return error ? { servers, error } : { servers };
 }
 
@@ -339,6 +353,7 @@ export class SdkRuntime implements ClaudeRuntime {
       prompt: input,
       options: {
         cwd, model: 'haiku', persistSession: false, maxTurns: 1,
+        tools: [], // text in, text out: without this every call ships the built-in tool schemas (~$0.014 per classification)
         systemPrompt: { type: 'custom', prompt: system },
         settingSources: [],
         spawnClaudeCodeProcess: (so) => this.transport.spawn(so, () => {}),

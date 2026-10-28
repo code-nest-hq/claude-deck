@@ -31,11 +31,11 @@ export function Palette() {
   const run = (e?: Entry) => { if (e) { close(); e.run(); } };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 pt-24" onClick={close}>
-      <div className="w-[36rem] max-w-[90vw] overflow-hidden rounded-lg border border-zinc-700 bg-zinc-950 shadow-xl" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 p-4 pt-24 backdrop-blur-sm" onClick={close}>
+      <div className="layer w-full max-w-2xl overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950 shadow-[0_24px_60px_-20px_rgba(0,0,0,0.8)]" style={{ '--layer-from': '0px' } as React.CSSProperties} onClick={(e) => e.stopPropagation()}>
         <input
           autoFocus
-          className="w-full border-b border-zinc-800 bg-transparent px-4 py-3 outline-none"
+          className="w-full border-b border-zinc-800 bg-transparent px-5 py-4 text-base text-zinc-100 outline-none placeholder:text-zinc-600"
           placeholder="Search sessions, #tag or actions…"
           value={q}
           onChange={(e) => { setQ(e.target.value); setI(0); }}
@@ -46,11 +46,11 @@ export function Palette() {
             else if (e.key === 'Enter') run(items[i]);
           }}
         />
-        <ul className="max-h-80 overflow-y-auto py-1">
-          {items.length === 0 && <li className="px-4 py-2 text-sm text-zinc-500">Nothing found</li>}
+        <ul className="max-h-96 overflow-y-auto p-2">
+          {items.length === 0 && <li className="px-3 py-3 text-sm text-zinc-500">Nothing found</li>}
           {items.map((it, n) => (
             <li key={it.key}>
-              <button className={`flex w-full items-center gap-3 px-4 py-1.5 text-left text-sm ${n === i ? 'bg-zinc-800' : ''}`} onMouseEnter={() => setI(n)} onClick={() => run(it)}>
+              <button className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm ${n === i ? 'bg-zinc-800/80' : ''}`} onMouseEnter={() => setI(n)} onClick={() => run(it)}>
                 <span className="flex-1 truncate">{it.label}</span>
                 <span className="shrink-0 text-xs text-zinc-500">{it.hint}</span>
               </button>

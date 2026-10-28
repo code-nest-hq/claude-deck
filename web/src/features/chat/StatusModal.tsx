@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import type { Config, Project, SessionStatus } from '@ccui/shared';
 import { api } from '../../api';
 import { fmtTokens } from '../../lib/format';
+import { Modal } from '../../lib/Modal';
+import { contextZone } from './AutoCompactModal';
 import type { Chat } from './reduce';
 
 const MODEL_LABEL = { haiku: 'Haiku', sonnet: 'Sonnet 5' } as const;
@@ -13,11 +15,6 @@ export function StatusModal({ sessionId, name, project, config, chat, onClose }:
   const [err, setErr] = useState('');
   const [copied, setCopied] = useState(false);
   useEffect(() => { api.sessionStatus(project.id, sessionId).then(setSt, (e: Error) => setErr(e.message)); }, [project.id, sessionId]);
-  useEffect(() => {
-    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', h);
-    return () => window.removeEventListener('keydown', h);
-  });
 
   const conn = config?.connections.find((c) => c.id === project.connectionId);
   const profileId = config?.activeProfile ?? 'default';
@@ -49,29 +46,22 @@ export function StatusModal({ sessionId, name, project, config, chat, onClose }:
     ['Último uso', fmtDate(st.meta.lastUsedAt)],
   );
   rows.push(
-    ['Contexto', chat.context ? `${chat.context.percentage.toFixed(0)}% · ${fmtTokens(chat.context.totalTokens)} / ${fmtTokens(chat.context.maxTokens)}` : '— (após o próximo turno)'],
+    ['Contexto', chat.context ? `${chat.context.percentage.toFixed(0)}% · ${fmtTokens(chat.context.totalTokens)} / ${fmtTokens(chat.context.maxTokens)} · ${contextZone(chat.context)}` : '— (após o próximo turno)'],
     ['Tokens', `${fmtTokens(t.input + t.output + t.cacheCreation + t.cacheRead)} (entrada ${fmtTokens(t.input)} · saída ${fmtTokens(t.output)} · cache escrita ${fmtTokens(t.cacheCreation)} · cache leitura ${fmtTokens(t.cacheRead)})`],
     ['Custo estimado', `$${t.costUsd.toFixed(4)}`],
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 text-left font-sans" onClick={onClose}>
-      <div className="max-h-[80vh] w-[36rem] max-w-[calc(100vw-2rem)] overflow-auto rounded-lg border border-zinc-700 bg-zinc-950 p-4" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center gap-2">
-          <h2 className="text-sm font-semibold text-zinc-100">Status da sessão</h2>
-          <span className="flex-1" />
-          <button className="text-xs text-zinc-500 hover:text-zinc-200" onClick={onClose}>Fechar</button>
-        </div>
-        {err && <div className="mt-2 text-xs text-rose-300">{err}</div>}
-        <dl className="mt-3 grid grid-cols-[8rem_1fr] gap-x-3 gap-y-1.5 text-xs">
-          {rows.map(([k, v]) => (
-            <div key={k} className="contents">
-              <dt className="text-zinc-500">{k}</dt>
-              <dd className="min-w-0 break-all text-zinc-300">{v}</dd>
-            </div>
-          ))}
-        </dl>
-      </div>
-    </div>
+    <Modal size="md" onClose={onClose} title="Session status" subtitle={name}>
+      {err && <div className="mb-3 text-sm text-rose-300">{err}</div>}
+      <dl className="grid grid-cols-[9rem_1fr] gap-x-4 gap-y-2.5 text-sm">
+        {rows.map(([k, v]) => (
+          <div key={k} className="contents">
+            <dt className="text-zinc-500">{k}</dt>
+            <dd className="min-w-0 break-all text-zinc-200">{v}</dd>
+          </div>
+        ))}
+      </dl>
+    </Modal>
   );
 }

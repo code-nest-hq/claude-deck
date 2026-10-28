@@ -14,6 +14,7 @@
     "start": "tsx server/src/index.ts",
     "typecheck": "tsc -p shared && tsc -p server && tsc -p web",
     "test": "node --import tsx --test server/test/unit.test.ts",
+    "audit": "tsx server/scripts/audit.ts",
     "test:live": "CCUI_LIVE=1 node --import tsx --test --test-concurrency=1 server/test/live.test.ts"
   },
   "devDependencies": {

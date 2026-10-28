@@ -4,12 +4,8 @@ import { api } from '../../api';
 import { PROJECT_COLORS } from '../../lib/projectColor';
 import { useApp } from '../../store';
 import { FolderBrowserModal } from '../projects/FolderBrowserModal';
+import { field, ghost, label, primary } from '../../lib/Modal';
 import { Toggle } from '../projects/ProjectSettingsModal';
-
-const field = 'w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none transition-colors placeholder:text-zinc-600 focus:border-zinc-600';
-const label = 'mb-1.5 block text-xs font-medium text-zinc-400';
-const primary = 'rounded-md bg-zinc-100 px-3.5 py-1.5 text-sm font-medium text-zinc-950 transition-colors hover:bg-zinc-200 disabled:opacity-40';
-const ghost = 'rounded-md px-3 py-1.5 text-sm text-zinc-400 transition-colors hover:bg-zinc-900 hover:text-zinc-100';
 
 function Shell({ onClose, children }: { onClose: () => void; children: React.ReactNode }) {
   return (
@@ -32,7 +28,7 @@ function Setup({ project, onDone }: { project: Project; onDone: () => void }) {
       <div className="space-y-2">
         <Toggle on={!!p.routing} label="Model Routing" desc="Picks Haiku or Sonnet per message to save tokens, escalating when the task needs more reasoning." onClick={() => patch({ routing: !p.routing })} />
         <Toggle on={p.lean} label="Lean" desc="Skips your hooks, plugins, skills, MCP and CLAUDE.md. About 80% cheaper to start a session." onClick={() => patch({ lean: !p.lean })} />
-        <Toggle on={!!p.autoCompact} label="Auto-compact" desc="After a reply, if context passes 60%, asks whether to run /compact." onClick={() => patch({ autoCompact: !p.autoCompact })} />
+        <Toggle on={!!p.autoCompact} label="Auto-compact" desc="After a reply, if context passes 60% or 150k tokens, asks whether to run /compact. Also asks before sending after a 5+ min pause on a big context (cold cache)." onClick={() => patch({ autoCompact: !p.autoCompact })} />
         <Toggle on={notifyOn} label="Notifications" desc="Browser alert when a background session finishes or needs permission." onClick={() => void toggleNotify()} />
         <Toggle
           on={!!p.bypass} tone="rose" label="Bypass permissions"

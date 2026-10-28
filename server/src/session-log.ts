@@ -25,6 +25,13 @@ export function recordSession(sessionId: string, kind: string, fields: Record<st
     .catch((err) => console.error(`[session-log] could not write: ${(err as Error).message}`));
 }
 
+/** size of one session's log in bytes (0 when there is none); the token audit uses it to tell whether a report is stale */
+export async function sessionLogBytes(sessionId: string): Promise<number> {
+  if (!uuidSchema.safeParse(sessionId).success) return 0;
+  await chain;
+  return (await fs.stat(fileOf(sessionId)).catch(() => null))?.size ?? 0;
+}
+
 /** resolves once everything recorded so far is on disk */
 export const flushSessionLog = () => chain;
 

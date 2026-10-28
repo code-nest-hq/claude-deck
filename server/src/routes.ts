@@ -11,7 +11,8 @@ import { ensureMeta, listProjectSessions, openSpecFor } from './domain';
 import { buildExport } from './export';
 import { parseGitStatus } from './git';
 import { loadPlugins, pluginArgs } from './plugins';
-import { buildHandoff } from './handoff';
+import { refreshSessionAudit } from './audit-store';
+import { buildHandoff, recordHandoffGenerated, recordHandoffLink } from './handoff';
 import { parseHistory } from './runtime/jsonl';
 import { logDay, logDays, readLogs } from './logs';
 import { activate, activeConfigDir, DEFAULT_PROFILE, knownProfile, listProfiles, logout, removeProfile, sendCode, startLogin, usageFor } from './profiles';
@@ -129,7 +130,7 @@ export function buildApi({ store, hub, conns }: Deps) {
     if (!p.startsWith('/') || /[\u0000-\u001f]/.test(p)) return bad(c, 'o caminho deve ser absoluto');
     if (!(await conns.get(b.connectionId).transport.isDirectory(p))) return bad(c, 'diretório não encontrado');
     if (projects().some((x) => x.connectionId === b.connectionId && x.path === p)) return c.json({ error: 'projeto já cadastrado' }, 409);
-    const created: Project = { id: randomUUID(), name: b.name, connectionId: b.connectionId, path: p, lean: b.lean, ...(b.color ? { color: b.color } : {}) };
+    const created: Project = { id: randomUUID(), name: b.name, connectionId: b.connectionId, path: p, lean: b.lean, autoCompact: true, ...(b.color ? { color: b.color } : {}) };
     projects().push(created);
     await store.projects.save();
     return c.json(created);
@@ -307,11 +308,12 @@ export function buildApi({ store, hub, conns }: Deps) {
     const { cwd } = openSpecFor(store, meta.sessionId);
     const transcript = await transport.readTranscript(meta.sessionId, cwd).catch(() => null);
     if (!transcript) return c.json({ error: 'transcrição da sessão não encontrada' }, 404);
-    const h = buildHandoff(transcript.main);
+    const h = buildHandoff(transcript.main, c.req.query('purpose') ?? '');
     if (c.req.query('enrich') !== '1') return c.json({ text: h.text } satisfies HandoffResult);
     try {
       const n = await runtime.handoffNotes(cwd, `${h.text}\n\n## Recent assistant messages\n${h.recent}`);
       const notes = n.text.trim();
+      recordHandoffGenerated(meta.sessionId, { costUsd: n.costUsd, enriched: !!notes, ctxTokens: hub.contextTokens(meta.sessionId) });
       return c.json({ text: notes ? `${h.text}\n\n## Decisions and pending (distilled by Haiku)\n${notes}` : h.text, enriched: !!notes, costUsd: n.costUsd } satisfies HandoffResult);
     } catch (e) { return c.json({ text: h.text, enriched: false, error: (e as Error).message } satisfies HandoffResult); }
   });
@@ -348,8 +350,11 @@ export function buildApi({ store, hub, conns }: Deps) {
     if (!p || !b) return bad(c, 'dados inválidos');
     const now = Date.now();
     const meta: SessionMeta = { sessionId: randomUUID(), projectId: p.id, name: b.name, model: b.model, effort: b.effort, routing: b.routing, createdAt: now, lastUsedAt: now };
+    const origin = b.handoffFrom && store.sessions.data.sessions.find((s) => s.sessionId === b.handoffFrom && s.projectId === p.id);
+    if (origin) meta.handoffFrom = origin.sessionId;
     store.sessions.data.sessions.push(meta);
     await store.sessions.save();
+    if (origin) recordHandoffLink(origin.sessionId, meta.sessionId, b.trigger, hub.contextTokens(origin.sessionId));
     return c.json(meta);
   });
 
@@ -364,6 +369,8 @@ export function buildApi({ store, hub, conns }: Deps) {
     if (b.archived !== undefined) meta.archived = b.archived;
     if (b.tags !== undefined) meta.tags = [...new Set(b.tags)];
     await store.sessions.save();
+    // archiving writes the session's token-audit report; best effort, never changes the response
+    if (b.archived === true) void refreshSessionAudit({ sessionId: meta.sessionId, projectId: meta.projectId, projectName: project(meta.projectId)?.name ?? 'project' }).catch((e) => console.error(`[audit] ${(e as Error).message}`));
     return c.body(null, 204);
   });
 

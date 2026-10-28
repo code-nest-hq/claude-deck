@@ -105,3 +105,47 @@ export function IconPlug({ className }: Props) {
     </svg>
   );
 }
+
+export function IconX({ className }: Props) {
+  return (
+    <svg {...base} className={className}>
+      <path d="M18 6 6 18" />
+      <path d="m6 6 12 12" />
+    </svg>
+  );
+}
+
+export function IconFile({ className }: Props) {
+  return (
+    <svg {...base} className={className}>
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <path d="M14 2v6h6" />
+    </svg>
+  );
+}
+
+export function IconPaperclip({ className }: Props) {
+  return (
+    <svg {...base} className={className}>
+      <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+    </svg>
+  );
+}
+
+export function IconTrash({ className }: Props) {
+  return (
+    <svg {...base} className={className}>
+      <path d="M3 6h18" />
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+    </svg>
+  );
+}
+
+export function IconPin({ className, filled }: Props & { filled?: boolean }) {
+  return (
+    <svg {...base} fill={filled ? 'currentColor' : 'none'} className={className}>
+      <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
+      <circle cx="12" cy="10" r="3" fill={filled ? 'var(--color-zinc-950)' : 'none'} />
+    </svg>
+  );
+}

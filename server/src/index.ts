@@ -11,7 +11,7 @@ import { errInfo, logError, logErrorSync, onLog } from './logs';
 import { initProfiles } from './profiles';
 import { buildApi } from './routes';
 import { reportOrphans } from './runtime/local-transport';
-import { guard, makeToken } from './security';
+import { guard, makeToken, MCP_OAUTH_PATH } from './security';
 import { openStore } from './store';
 import { attachWs } from './ws';
 
@@ -41,6 +41,11 @@ app.route('/api', buildApi({ store, hub, conns }));
 app.onError((err, c) => {
   const errorId = logError({ level: 'error', source: 'http', code: 'http_500', ...errInfo(err), context: { method: c.req.method, path: c.req.path } });
   return c.json({ error: err.message, errorId }, 500);
+});
+// OAuth redirect target for MCP sign-in; no bearer token (the browser navigates here), the unguessable `state` of a pending sign-in is the credential
+app.get(MCP_OAUTH_PATH, async (c) => {
+  const server = await hub.mcpOAuthCallback(new URL(c.req.url));
+  return c.html(server ? '<p>Signed in. You can close this tab and go back to Code Nest.</p>' : '<p>Unknown or expired sign-in. Start it again from the MCP panel.</p>', server ? 200 : 400);
 });
 app.use('/*', serveStatic({ root: './web/dist' }));
 
