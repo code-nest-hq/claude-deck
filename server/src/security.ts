@@ -1,6 +1,7 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { MiddlewareHandler } from 'hono';
 
+export const MCP_OAUTH_PATH = '/mcp-oauth/callback';
 export const makeToken = () => process.env.CCUI_TOKEN ?? randomBytes(32).toString('base64url');
 
 export function tokenOk(given: string | undefined, token: string): boolean {

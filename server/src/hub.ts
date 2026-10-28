@@ -182,17 +182,35 @@ export class SessionHub {
 
   // `/mcp`: panel as an event (like shell); uses the live process when there is one, otherwise a short-lived one
   async mcp(id: string, cardId?: string, action?: McpAction): Promise<'ok' | 'busy'> {
+  // pending MCP sign-ins by OAuth `state`, so the browser's redirect to the Deck's callback route finds its session
+  private mcpOAuth = new Map<string, { sessionId: string; server: string; cardId: string }>();
+
+  // GET /mcp-oauth/callback: finishes the sign-in with the URL the provider redirected the browser to
+  async mcpOAuthCallback(url: URL): Promise<string | null> {
+    const state = url.searchParams.get('state') ?? '';
+    const p = this.mcpOAuth.get(state);
+    if (!p) return null;
+    this.mcpOAuth.delete(state);
+    await this.mcp(p.sessionId, p.cardId, { kind: 'authCallback', server: p.server, callbackUrl: url.toString() });
+    return p.server;
+  }
+
     const spec = this.spec(id);
     const e = this.entry(id);
     if (e.mcpRunning) return 'busy';
     e.mcpRunning = true;
-    if (action) recordSession(id, 'action', { action: 'mcp', mcpAction: action });
+    if (action) recordSession(id, 'action', { action: 'mcp', mcpAction: { ...action, callbackUrl: action.callbackUrl && '[redacted]' } });
     const mid = cardId ?? randomUUID();
     this.emit(id, e, { type: 'mcp.status', id: mid });
     try {
       const r = e.live ? await e.live.mcp(action) : await this.runtimeFor(id).mcp(spec.cwd, spec.lean, action);
       this.emit(id, e, { type: 'mcp.status', id: mid, ...r });
+      // the pending OAuth state lives in the Claude process: a short-lived one would drop it before the callback arrives
+      if (action && !e.live && /^(auth|authCallback)$/.test(action.kind)) throw new Error('Send a message first so the session is running, then authenticate.');
     } catch (err) {
+      const authUrl = action?.kind === 'auth' ? r.servers.find((s) => s.name === action.server)?.authUrl : undefined;
+      const state = authUrl && new URL(authUrl).searchParams.get('state');
+      if (state && action) this.mcpOAuth.set(state, { sessionId: id, server: action.server, cardId: mid });
       this.emit(id, e, { type: 'mcp.status', id: mid, servers: [], error: (err as Error).message });
     } finally { e.mcpRunning = false; }
     return 'ok';

@@ -6,7 +6,7 @@ import { blockedSlash } from './commands';
 import { ensureMeta, sessionLabel, touch } from './domain';
 import type { Client, SessionHub } from './hub';
 import { errInfo, logError } from './logs';
-import { hostOriginOk, tokenOk } from './security';
+import { hostOriginOk, MCP_OAUTH_PATH, tokenOk } from './security';
 import type { Store } from './store';
 
 const safeJson = (s: string) => { try { return JSON.parse(s); } catch { return null; } };
@@ -72,7 +72,7 @@ export function attachWs(server: Server, o: { port: number; token: string; hub: 
             if ((await o.hub.shell(m.sessionId, m.command)) === 'busy') fail('busy', 'já há um comando shell em execução nesta sessão', 'warn');
             break;
           case 'mcp':
-            if ((await o.hub.mcp(m.sessionId, m.id, m.action)) === 'busy') fail('busy', 'an /mcp request is already running in this session', 'warn');
+            if ((await o.hub.mcp(m.sessionId, m.id, m.action && { ...m.action, redirectUri: `http://127.0.0.1:${o.port}${MCP_OAUTH_PATH}` })) === 'busy') fail('busy', 'an /mcp request is already running in this session', 'warn');
             break;
           case 'permission': o.hub.answerPermission(client, m.sessionId, m.reqId, m.allow, m.updatedInput); break;
         }

@@ -141,9 +141,14 @@ export type McpStatus = 'connected' | 'failed' | 'needs-auth' | 'pending' | 'dis
 // what the terminal's /mcp shows; never env/headers (may carry secrets)
 export interface McpServerView {
   name: string; status: McpStatus; scope?: string; transport?: string; target?: string; error?: string;
-  serverInfo?: { name: string; version: string }; tools: Array<{ name: string; description?: string }>;
+  serverInfo?: { name: string; version: string }; authUrl?: string; tools: Array<{ name: string; description?: string }>;
 }
-export const mcpActionSchema = z.object({ kind: z.enum(['reconnect', 'enable', 'disable']), server: z.string().min(1).max(200) });
+export const mcpActionSchema = z.object({
+  kind: z.enum(['reconnect', 'enable', 'disable', 'auth', 'authCallback', 'clearAuth']),
+  server: z.string().min(1).max(200),
+  redirectUri: z.string().max(500).optional(), // 'auth' only: set by the server (the Deck's own callback route), whatever the client sends is overwritten
+  callbackUrl: z.string().max(4000).optional(), // only for 'authCallback': the URL the browser was redirected to after sign-in
+});
 export type McpAction = z.infer<typeof mcpActionSchema>;
 
 // `/plugin` panel: the terminal's `claude plugin …` run on the project's machine (local or SSH)

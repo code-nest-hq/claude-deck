@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { McpServerView, McpStatus } from '@ccui/shared';
+import type { McpAction, McpServerView, McpStatus } from '@ccui/shared';
 import { useApp } from '../../store';
 import { Modal, card, field, ghost, secondary } from '../../lib/Modal';
 import type { Item } from './reduce';
@@ -46,7 +46,7 @@ export function McpModal({ it, onClose }: { it?: Mcp; onClose: () => void }) {
     ['Other MCPs', shown.filter((x) => !x.scope || !known.has(x.scope))] as const,
   ].filter(([, list]) => list.length > 0);
   const sel = servers.find((x) => x.name === open);
-  const act = (kind: 'reconnect' | 'enable' | 'disable', server: string) => it && mcp(it.id, { kind, server });
+  const act = (a: McpAction) => it && mcp(it.id, a);
 
   return (
     <Modal
@@ -61,7 +61,7 @@ export function McpModal({ it, onClose }: { it?: Mcp; onClose: () => void }) {
         <ServerDetail
           s={sel} busy={loading} showTools={showTools}
           onBack={() => { setOpen(null); setShowTools(false); }}
-          onTools={() => setShowTools((v) => !v)} onAction={(k) => act(k, sel.name)}
+          onTools={() => setShowTools((v) => !v)} onAction={(a) => act({ ...a, server: sel.name })}
         />
       ) : (
         <>
@@ -92,7 +92,7 @@ export function McpModal({ it, onClose }: { it?: Mcp; onClose: () => void }) {
 
 function ServerDetail({ s, busy, showTools, onBack, onTools, onAction }: {
   s: McpServerView; busy: boolean; showTools: boolean;
-  onBack: () => void; onTools: () => void; onAction: (k: 'reconnect' | 'enable' | 'disable') => void;
+  onBack: () => void; onTools: () => void; onAction: (a: Omit<McpAction, 'server'>) => void;
 }) {
   const rows: Array<[string, React.ReactNode]> = [
     ['Status', <Status s={s.status} />],
@@ -103,6 +103,8 @@ function ServerDetail({ s, busy, showTools, onBack, onTools, onAction }: {
     ['Tools', `${s.tools.length} tool(s)`],
   ];
   const btn = secondary;
+  const [cb, setCb] = useState('');
+  const own = s.scope !== 'claudeai';
   return (
     <div>
       <button className={`${ghost} -ml-3`} onClick={onBack}>← Back</button>
@@ -113,14 +115,25 @@ function ServerDetail({ s, busy, showTools, onBack, onTools, onAction }: {
       {s.error && <pre className="mt-3 max-h-40 overflow-auto whitespace-pre-wrap rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-2 font-mono text-xs text-rose-300">{s.error}</pre>}
       {s.status === 'needs-auth' && (s.scope === 'claudeai'
         ? <div className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-sm text-amber-300/90">claude.ai connectors are authenticated on claude.ai: sign in there, then click Reconnect.</div>
-        : <div className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-sm text-amber-300/90">Authentication happens in the browser via OAuth: run <code>/mcp</code> once in the terminal <code>claude</code> to sign in.</div>)}
+        : <div className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-sm text-amber-300/90">Sign in via OAuth: click Authenticate and finish in the browser. It completes automatically; if the final page fails to load, copy its address and paste it below.</div>)}
+      {s.authUrl && (
+        <div className={`${card} mt-3 space-y-2 px-4 py-3 text-sm`}>
+          <a className="break-all text-sky-300 underline" href={s.authUrl} target="_blank" rel="noopener noreferrer">Open sign-in page ↗</a>
+          <div className="flex gap-2">
+            <input className={field} placeholder="Paste the redirected URL (http://localhost:…?code=…)" value={cb} onChange={(e) => setCb(e.target.value)} />
+            <button className={btn} disabled={busy || !cb.trim()} onClick={() => { onAction({ kind: 'authCallback', callbackUrl: cb.trim() }); setCb(''); }}>Submit</button>
+          </div>
+        </div>
+      )}
       <div className="mt-4 flex flex-wrap gap-2">
         {s.scope === 'claudeai' && s.status === 'needs-auth' && (
           <a className={btn} href="https://claude.ai/settings/connectors" target="_blank" rel="noopener noreferrer">Open claude.ai connectors ↗</a>
         )}
         {s.tools.length > 0 && <button className={btn} onClick={onTools}>{showTools ? 'Hide tools' : 'View tools'}</button>}
-        {s.status !== 'disabled' && <button className={btn} disabled={busy} onClick={() => onAction('reconnect')}>Reconnect</button>}
-        <button className={btn} disabled={busy} onClick={() => onAction(s.status === 'disabled' ? 'enable' : 'disable')}>{s.status === 'disabled' ? 'Enable' : 'Disable'}</button>
+        {own && s.status === 'needs-auth' && <button className={btn} disabled={busy} onClick={() => onAction({ kind: 'auth' })}>Authenticate</button>}
+        {own && s.status === 'connected' && s.transport !== 'stdio' && <button className={btn} disabled={busy} onClick={() => onAction({ kind: 'clearAuth' })}>Sign out</button>}
+        {s.status !== 'disabled' && <button className={btn} disabled={busy} onClick={() => onAction({ kind: 'reconnect' })}>Reconnect</button>}
+        <button className={btn} disabled={busy} onClick={() => onAction({ kind: s.status === 'disabled' ? 'enable' : 'disable' })}>{s.status === 'disabled' ? 'Enable' : 'Disable'}</button>
       </div>
       {showTools && (
         <ul className={`${card} mt-4 space-y-1.5 px-4 py-3 text-sm`}>
