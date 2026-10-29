@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { compactBreakEven } from '@ccui/shared';
 import { fmtTokens } from '../../lib/format';
 import { Modal, ghost, primary } from '../../lib/Modal';
 import type { Chat } from './reduce';
@@ -10,6 +11,12 @@ export const COMPACT_THRESHOLD = 60;
 // ...or this many tokens, whichever comes first: on a 1M window 60% is 600k tokens, which sessions never reach
 // (the largest context seen in the logs was ~250k), so the percentage alone would never fire there.
 export const COMPACT_TOKENS = 150_000;
+
+// Compacting is not free: it pays off only if enough messages follow (the token audit measured ~10 on average).
+const breakEvenText = (tokens: number) => {
+  const { costUsd, turns } = compactBreakEven(tokens);
+  return Number.isFinite(turns) ? `Compactar custa ~US$ ${costUsd.toFixed(2)} e só compensa se você ainda enviar ~${turns} mensagens nesta sessão; se está perto de terminar, cancele.` : '';
+};
 
 // "Smart zone": the early part of the context where the model reasons best. `warn` = leaving it (consider a handoff),
 // `dumb` = past the compaction threshold above. Derived client-side from context.usage.
@@ -104,8 +111,9 @@ export function AutoCompactModal({ sessionId, chat, enabled, onCompact, onDeclin
     >
       <p className="text-sm leading-relaxed text-zinc-400">
         O contexto está em <span className="font-mono text-zinc-100">{Math.round(ctx!.percentage)}%</span> ({fmtTokens(ctx!.totalTokens)} de {fmtTokens(ctx!.maxTokens)} tokens).
-        Cada mensagem relê todo esse contexto: compactar agora economiza tokens e evita perda de qualidade em contextos longos.
+        Cada mensagem relê todo esse contexto: compactar evita perda de qualidade em contextos longos e reduz o custo de cada mensagem seguinte.
       </p>
+      <p className="mt-2 text-sm leading-relaxed text-zinc-500">{breakEvenText(ctx!.totalTokens)}</p>
     </Modal>
   );
 
