@@ -245,3 +245,26 @@ export function findLines(text: string, term: string, maxLine = 160): LineHit[] 
   return hits;
 }
 export interface ProjectHit extends LineHit { sessionId: string; name: string; role: 'user' | 'assistant' }
+
+// Price table for counterfactuals (token audit, server/src/audit.ts) and the auto-compact estimate (web). USD per million tokens.
+// Fitted to this machine's logged `costUsd` (not copied from a price list): cache writes land at ~2x input (the 1h cache tier)
+// and the Sonnet 5 family is cheaper than earlier Sonnets. `npm run audit` prints the remaining drift; re-fit if it grows.
+export interface Rates { input: number; output: number; cacheWrite: number; cacheRead: number }
+export const RATES: Record<'haiku' | 'sonnet', Rates> = {
+  haiku: { input: 1, output: 5, cacheWrite: 2, cacheRead: 0.1 },
+  sonnet: { input: 2, output: 10, cacheWrite: 4, cacheRead: 0.2 },
+};
+
+/** typical size of a context right after /compact (audit: 10k-29k tokens, median ~21k) */
+export const POST_COMPACT_TOKENS = 22_000;
+/**
+ * What `/compact` costs at `preTokens` of context and how many later messages it takes to pay off (Sonnet rates).
+ * Cost = re-reading the context + writing the summary (it becomes the new context) + one cache rebuild; saving = the cache reads
+ * not paid on every later turn. `turns` is Infinity when the summary is not smaller than the context.
+ */
+export function compactBreakEven(preTokens: number): { costUsd: number; turns: number } {
+  const r = RATES.sonnet; const post = POST_COMPACT_TOKENS;
+  const costUsd = (preTokens * r.cacheRead + post * r.output + post * (r.cacheWrite - r.cacheRead)) / 1e6;
+  const perTurn = (Math.max(0, preTokens - post) * r.cacheRead) / 1e6;
+  return { costUsd, turns: perTurn > 0 ? Math.ceil(costUsd / perTurn) : Infinity };
+}
