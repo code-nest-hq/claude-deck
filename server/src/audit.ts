@@ -1,21 +1,12 @@
-import type { ModelUsage } from '@ccui/shared';
+import { RATES, type ModelUsage, type Rates } from '@ccui/shared';
 import type { SessionLogLine } from './session-log';
 
 // Token audit, per-session facts: a pure pass over one session log (session-log.ts) that keeps only numbers and ids, no
 // message text. audit-verdict.ts turns many of these into verdicts; audit-store.ts persists them.
 
+export { RATES, type Rates };
 export const ANALYSIS_VERSION = 2; // bump when the facts or RATES change: reports of an older version are rebuilt
 
-/**
- * USD per million tokens. Only used for counterfactuals and the drift check; measured costs come from the log.
- * Fitted to this machine's logged `costUsd` (not copied from a price list): cache writes land at ~2x input (the 1h cache tier)
- * and the Sonnet 5 family is cheaper than earlier Sonnets. `npm run audit` prints the remaining drift; re-fit if it grows.
- */
-export interface Rates { input: number; output: number; cacheWrite: number; cacheRead: number }
-export const RATES: Record<'haiku' | 'sonnet', Rates> = {
-  haiku: { input: 1, output: 5, cacheWrite: 2, cacheRead: 0.1 },
-  sonnet: { input: 2, output: 10, cacheWrite: 4, cacheRead: 0.2 },
-};
 export function rateOf(modelId: string): { family: 'haiku' | 'sonnet'; rates: Rates } | null {
   const family = /haiku/i.test(modelId) ? 'haiku' : /sonnet/i.test(modelId) ? 'sonnet' : null;
   return family ? { family, rates: RATES[family] } : null;

@@ -24,6 +24,7 @@ const { recordSession, readSessionLog, flushSessionLog } = await import('../src/
 const { redactString, redactDeep } = await import('../src/redact');
 const { buildExport } = await import('../src/export');
 const { buildSessionAudit, RATES, tokenCost, rateOf } = await import('../src/audit');
+const { compactBreakEven } = await import('@ccui/shared');
 const { verdicts, renderSummary, MIN_SAMPLE } = await import('../src/audit-verdict');
 const { slugify, auditDir, refreshSessionAudit, readAllAudits, markAnalyzed } = await import('../src/audit-store');
 const { buildHandoff, recordHandoffGenerated, recordHandoffLink } = await import('../src/handoff');
@@ -577,6 +578,14 @@ describe('audit verdicts', () => {
     const v = verdicts([lonely]);
     assert.equal(v.handoff.quality, 'not measured');
     assert.equal(v.handoff.n, 0);
+  });
+  test('compactBreakEven matches what the audit measured and shrinks as the context grows', () => {
+    const at150 = compactBreakEven(150_000);
+    assert.ok(at150.costUsd > 0.2 && at150.costUsd < 0.4, String(at150.costUsd)); // measured: $0.25-0.37 at ~150k
+    assert.ok(at150.turns >= 8 && at150.turns <= 14, String(at150.turns));         // measured: 6-12 turns
+    assert.ok(compactBreakEven(200_000).turns < at150.turns);
+    assert.ok(compactBreakEven(80_000).turns > at150.turns);
+    assert.equal(compactBreakEven(10_000).turns, Infinity); // nothing to gain: the summary is as big as the context
   });
   test('renderSummary names the features and the caveats', () => {
     const t = renderSummary(verdicts([mk()]));
