@@ -143,6 +143,21 @@ describe('SessionHub send (fake runtime)', () => {
     assert.deepEqual(rt.lives[0].sent, ['hello']);
   });
 
+  test('subagent usage is summed per turn (deduped by message id), kept off the event stream', async () => {
+    const rt = fakeRuntime();
+    const h = hubWith(rt, false);
+    await h.attach();
+    await h.hub.send(h.id, 'one');
+    await h.waitFor((e) => e.type === 'turn.completed');
+    const u = { type: 'subagent.usage' as const, model: 'claude-sonnet-5', input: 0, output: 1000, cacheCreation: 0, cacheRead: 0 };
+    for (const messageId of ['a', 'a', 'b']) rt.lives[0].out.push({ ...u, messageId });
+    rt.lives[0].out.push({ type: 'turn.completed', totals: { costUsd: 0.1, input: 1, output: 1, cacheCreation: 0, cacheRead: 0 }, inputTokens: 1, outputTokens: 1, cacheCreationTokens: 0, cacheReadTokens: 0, modelUsage: {} });
+    await h.waitFor((e) => e.type === 'turn.completed' && !!e.subagent);
+    const done = h.events().filter((e) => e.type === 'turn.completed').at(-1);
+    assert.deepEqual(done?.type === 'turn.completed' && done.subagent, { costUsd: 0.02, tokens: 2000 });
+    assert.ok(!h.events().some((e) => e.type === 'subagent.usage'));
+  });
+
   test('/compact skips routing and keeps the current model', async () => {
     const rt = fakeRuntime();
     const h = hubWith(rt);

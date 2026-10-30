@@ -71,7 +71,7 @@ function ItemView({ it, busy, bypass, commands }: { it: Item; busy: boolean; byp
   if (it.kind === 'error') return <ErrorItem text={it.text} errorId={it.errorId} />;
   if (it.kind === 'shell') return <ShellCard it={it} busy={busy} />;
   if (it.kind === 'mcp') return null; // rendered by McpModal
-  if (it.kind === 'turn') return <TurnSummary modelUsage={it.modelUsage} skills={it.skills} commands={commands} bypass={bypass} />;
+  if (it.kind === 'turn') return <TurnSummary modelUsage={it.modelUsage} skills={it.skills} subagent={it.subagent} commands={commands} bypass={bypass} />;
   return <ToolCard it={it} />;
 }
 
@@ -89,7 +89,7 @@ function TurnLoading({ phase, tool, startedAt, now }: { phase: 'routing' | 'thin
   );
 }
 
-function TurnSummary({ modelUsage, skills, commands, bypass }: { modelUsage: Record<string, ModelUsage>; skills: SkillUse[]; commands?: SlashCommandInfo[]; bypass: boolean }) {
+function TurnSummary({ modelUsage, skills, subagent, commands, bypass }: { modelUsage: Record<string, ModelUsage>; skills: SkillUse[]; subagent?: { costUsd: number; tokens: number }; commands?: SlashCommandInfo[]; bypass: boolean }) {
   const [open, setOpen] = useState(false);
   // a typed "/name" only counts when it is a known skill (builtins like /compact aren't skills)
   const used = skills.filter((s) => s.by === 'claude' || commands?.some((c) => c.name === s.name && !c.builtin));
@@ -99,6 +99,7 @@ function TurnSummary({ modelUsage, skills, commands, bypass }: { modelUsage: Rec
   return (
     <div className="flex items-center justify-center gap-2 text-center font-mono text-[11px] text-zinc-600">
       turno concluído — ${cost.toFixed(4)} · {fmtTokens(tok)} tokens · {models}
+      {subagent && cost > 0 && <span title="Estimated at list rates; the part of this turn's cost spent inside subagents">· subagente ~${subagent.costUsd.toFixed(4)} ({Math.min(100, Math.round((subagent.costUsd / cost) * 100))}%)</span>}
       {used.length > 0 && (
         <button className="rounded-sm border border-violet-500/25 bg-violet-500/10 px-1.5 py-0.5 text-[10px] tracking-wider text-violet-300/90 hover:bg-violet-500/20" onClick={() => setOpen(true)}>
           {used.length === 1 ? 'skill invocada' : `${used.length} skills invocadas`}

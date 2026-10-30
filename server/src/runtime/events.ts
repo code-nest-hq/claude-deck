@@ -61,6 +61,8 @@ export function mapMessage(m: SDKMessage): EventBody[] {
     }
     case 'assistant': {
       const out: EventBody[] = [];
+      const u = m.message.usage;
+      if (taskId && u) out.push({ type: 'subagent.usage', messageId: m.message.id, model: m.message.model, input: u.input_tokens ?? 0, output: u.output_tokens ?? 0, cacheCreation: u.cache_creation_input_tokens ?? 0, cacheRead: u.cache_read_input_tokens ?? 0 });
       for (const b of m.message.content) {
         if (taskId) {
           // dentro de um subagente: só repassa a ferramenta chamada (log de comandos daquela aba)

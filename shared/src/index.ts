@@ -124,7 +124,10 @@ export type EventBody =
   | ({ type: 'permission.requested' } & PendingPermission)
   | { type: 'permission.resolved'; reqId: string; allow: boolean }
   // modelUsage: no evento entregue ao cliente é o gasto SÓ deste turno, por modelo (delta calculado em hub.ts)
-  | { type: 'turn.completed'; totals: UsageTotals; inputTokens: number; outputTokens: number; cacheCreationTokens: number; cacheReadTokens: number; modelUsage: Record<string, ModelUsage> }
+  // subagent = this turn's subagent share (estimated at RATES: the SDK result has no per-agent cost); set by the hub
+  | { type: 'turn.completed'; totals: UsageTotals; inputTokens: number; outputTokens: number; cacheCreationTokens: number; cacheReadTokens: number; modelUsage: Record<string, ModelUsage>; subagent?: { costUsd: number; tokens: number } }
+  // one subagent API message's usage; consumed by the hub (summed into turn.completed.subagent), never sent to clients
+  | { type: 'subagent.usage'; messageId: string; model: string; input: number; output: number; cacheCreation: number; cacheRead: number }
   // context window occupancy after a turn (SDK getContextUsage 'summary', no token cost); percentage is of the autocompact window
   | { type: 'context.usage'; percentage: number; totalTokens: number; maxTokens: number }
   // `/compact` (manual or the CLI's own auto-compact): no real progress is reported, only start and end
@@ -254,6 +257,12 @@ export const RATES: Record<'haiku' | 'sonnet', Rates> = {
   haiku: { input: 1, output: 5, cacheWrite: 2, cacheRead: 0.1 },
   sonnet: { input: 2, output: 10, cacheWrite: 4, cacheRead: 0.2 },
 };
+
+/** estimated cost of one API message's usage; anything that is not Haiku is priced as Sonnet (the only other session model, Opus is subagent-only) */
+export function usageCostUsd(model: string, u: { input: number; output: number; cacheCreation: number; cacheRead: number }): number {
+  const r = model.includes('haiku') ? RATES.haiku : RATES.sonnet;
+  return (u.input * r.input + u.output * r.output + u.cacheCreation * r.cacheWrite + u.cacheRead * r.cacheRead) / 1e6;
+}
 
 /** typical size of a context right after /compact (audit: 10k-29k tokens, median ~21k) */
 export const POST_COMPACT_TOKENS = 22_000;

@@ -28,7 +28,7 @@ function Setup({ project, onDone }: { project: Project; onDone: () => void }) {
       <div className="space-y-2">
         <Toggle on={!!p.routing} label="Model Routing" desc="Picks Haiku or Sonnet per message to save tokens, escalating when the task needs more reasoning." onClick={() => patch({ routing: !p.routing })} />
         <Toggle on={p.lean} label="Lean" desc="Skips your hooks, plugins, skills, MCP and CLAUDE.md. About 80% cheaper to start a session." onClick={() => patch({ lean: !p.lean })} />
-        <Toggle on={!!p.autoCompact} label="Auto-compact" desc="After a reply, if context passes 60% or 150k tokens, asks whether to run /compact. Also asks before sending after a 5+ min pause on a big context (cold cache)." onClick={() => patch({ autoCompact: !p.autoCompact })} />
+        <Toggle on={!!p.autoCompact} label="Auto-compact" desc="After a reply, if context passes 60% or 100k tokens, asks whether to run /compact. Also asks before sending after a 5+ min pause on a big context (cold cache)." onClick={() => patch({ autoCompact: !p.autoCompact })} />
         <Toggle on={notifyOn} label="Notifications" desc="Browser alert when a background session finishes or needs permission." onClick={() => void toggleNotify()} />
         <Toggle
           on={!!p.bypass} tone="rose" label="Bypass permissions"

@@ -7,7 +7,7 @@ export type Item = (
   | { kind: 'tool'; toolUseId: string; name: string; input: unknown; output?: string; isError?: boolean }
   | { kind: 'shell'; id: string; command: string; output?: string; exitCode?: number | null; truncated?: boolean }
   | { kind: 'mcp'; id: string; servers?: McpServerView[]; loading: boolean; error?: string }
-  | { kind: 'turn'; modelUsage: Record<string, ModelUsage>; skills: SkillUse[] }
+  | { kind: 'turn'; modelUsage: Record<string, ModelUsage>; skills: SkillUse[]; subagent?: { costUsd: number; tokens: number } }
   | { kind: 'error'; text: string; errorId?: string }
 ) & { ts?: number };
 
@@ -182,7 +182,7 @@ export function applyEvent(c: Chat, ev: ClaudeEvent): Chat {
       next.totals = ev.totals;
       next.lastTokens = { input: ev.inputTokens, output: ev.outputTokens, cacheCreation: ev.cacheCreationTokens, cacheRead: ev.cacheReadTokens };
       // resumo só deste turno (com modelo usado); mostrado no terminal, não na conversa principal (ItemView ignora 'turn')
-      if (Object.keys(ev.modelUsage).length > 0) items.push({ kind: 'turn', modelUsage: ev.modelUsage, skills: turnSkills(items) });
+      if (Object.keys(ev.modelUsage).length > 0) items.push({ kind: 'turn', modelUsage: ev.modelUsage, skills: turnSkills(items), subagent: ev.subagent });
       break;
     case 'bg.tasks':
       next.bgTasks = ev.tasks;

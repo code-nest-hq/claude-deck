@@ -10,7 +10,7 @@ import type { Chat } from './reduce';
 export const COMPACT_THRESHOLD = 60;
 // ...or this many tokens, whichever comes first: on a 1M window 60% is 600k tokens, which sessions never reach
 // (the largest context seen in the logs was ~250k), so the percentage alone would never fire there.
-export const COMPACT_TOKENS = 150_000;
+export const COMPACT_TOKENS = 100_000;
 
 // Compacting is not free: it pays off only if enough messages follow (the token audit measured ~10 on average).
 const breakEvenText = (tokens: number) => {

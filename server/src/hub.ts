@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { ZERO_TOTALS, type BgTask, type ClaudeEvent, type EventBody, type McpAction, type Model, type ModelUsage, type PendingPermission, type ServerMsg, type SessionState, type UsageTotals } from '@ccui/shared';
+import { ZERO_TOTALS, usageCostUsd, type BgTask, type ClaudeEvent, type EventBody, type McpAction, type Model, type ModelUsage, type PendingPermission, type ServerMsg, type SessionState, type UsageTotals } from '@ccui/shared';
 import { logError } from './logs';
 import { recordSession } from './session-log';
 import type { Classification, ClaudeRuntime, LiveSession, OpenOptions } from './runtime/types';
@@ -34,6 +34,7 @@ interface Entry {
   ctxTokens?: number; // context size after the last turn (context.usage)
   turnEndedAt?: number; // when the last turn finished, to tell whether the prompt cache is still warm
   compacting?: boolean; // a compact is in flight; the SDK re-sends status 'compacting' every ~30s, only the first counts
+  subUsage?: Map<string, Extract<EventBody, { type: 'subagent.usage' }>>; // this turn's subagent API messages by id (a message arrives once per content block)
   compactBy?: 'user' | 'deck-auto'; // who asked for the /compact in flight; none when its 'started' arrives = the CLI's own auto-compact
 }
 
@@ -251,6 +252,7 @@ export class SessionHub {
         if (b.phase === 'started' && e.compacting) continue;
         e.compacting = b.phase === 'started';
       }
+      if (b.type === 'subagent.usage') { (e.subUsage ??= new Map()).set(b.messageId, b); continue; }
       const ev = this.emit(id, e, b);
       if (ev.type === 'error' && ev.code === 'exit') crash = ev;
     }
@@ -323,6 +325,11 @@ export class SessionHub {
       const cumulative = body.modelUsage;
       body = { ...body, modelUsage: diffModelUsage(e.prevModelUsage ?? {}, cumulative) };
       e.prevModelUsage = cumulative;
+      if (e.subUsage?.size) {
+        const us = [...e.subUsage.values()];
+        body = { ...body, subagent: { costUsd: us.reduce((s, u) => s + usageCostUsd(u.model, u), 0), tokens: us.reduce((s, u) => s + u.input + u.output + u.cacheCreation + u.cacheRead, 0) } };
+        e.subUsage.clear();
+      }
     }
     const ev = { ...body, sessionId: id, seq: ++e.seq, ts: Date.now() } as ClaudeEvent;
     e.buffer.push(ev);
