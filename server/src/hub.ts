@@ -305,9 +305,9 @@ export class SessionHub {
   }
 
   /** only a client attached to the session may answer its prompts */
-  answerPermission(c: Client, id: string, reqId: string, allow: boolean, updatedInput?: Record<string, unknown>) {
+  answerPermission(c: Client, id: string, reqId: string, allow: boolean, updatedInput?: Record<string, unknown>, always?: boolean) {
     if (!c.sessions.has(id)) return;
-    this.entries.get(id)?.live?.answerPermission(reqId, allow, updatedInput);
+    this.entries.get(id)?.live?.answerPermission(reqId, allow, updatedInput, always);
   }
 
   /** ends the live process (the session stays resumable); the next send reopens it with the current spec */
@@ -355,7 +355,7 @@ export class SessionHub {
     for (const c of e.clients) c.send({ type: 'event', event: ev });
     switch (body.type) {
       case 'permission.requested':
-        e.pending.set(body.reqId, { reqId: body.reqId, toolName: body.toolName, input: body.input });
+        e.pending.set(body.reqId, { reqId: body.reqId, toolName: body.toolName, input: body.input, alwaysRules: body.alwaysRules });
         this.setState(id, e, 'awaiting_permission');
         break;
       case 'permission.resolved':

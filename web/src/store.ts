@@ -61,7 +61,7 @@ interface App {
   interrupt(): void;
   shell(command: string): void;
   mcp(id?: string, action?: McpAction): void;
-  answer(reqId: string, allow: boolean, updatedInput?: Record<string, unknown>): void;
+  answer(reqId: string, allow: boolean, updatedInput?: Record<string, unknown>, always?: boolean): void;
   chooseConnection(connectionId: string): Promise<void>;
 }
 
@@ -274,10 +274,10 @@ export const useApp = create<App>((set, get) => {
       const a = get().active;
       if (a) sock?.send({ type: 'mcp', sessionId: a.sessionId, id, action });
     },
-    answer(reqId, allow, updatedInput) {
+    answer(reqId, allow, updatedInput, always) {
       // the session that owns the prompt, not the active one: switching sessions between render and click must not misroute it
       const sessionId = Object.keys(get().chats).find((id) => get().chats[id].pending.some((p) => p.reqId === reqId));
-      if (sessionId) sock?.send({ type: 'permission', sessionId, reqId, allow, updatedInput });
+      if (sessionId) sock?.send({ type: 'permission', sessionId, reqId, allow, updatedInput, always });
     },
 
     async chooseConnection(connectionId) {

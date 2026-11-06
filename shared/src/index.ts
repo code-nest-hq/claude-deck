@@ -97,7 +97,7 @@ export const lastConnectionBody = z.object({ connectionId: z.string().min(1) });
 
 // ---- eventos (contrato único entre backend e React) ----
 export type SessionState = 'idle' | 'running' | 'awaiting_permission' | 'exited';
-export interface PendingPermission { reqId: string; toolName: string; input: unknown }
+export interface PendingPermission { reqId: string; toolName: string; input: unknown; /** rules "Always allow" would add to permissions.allow; absent when the SDK offered no suggestion */ alwaysRules?: string[] }
 // a task Claude left running in the background (Bash run_in_background, backgrounded subagent, monitor...); taskId = SDK task_id
 export interface BgTask {
   taskId: string; toolUseId?: string; kind: string; description: string;
@@ -208,7 +208,7 @@ export const ClientMsg = z.discriminatedUnion('type', [
   z.object({ type: z.literal('shell'), sessionId: uuidSchema, command: z.string().trim().min(1).max(10_000) }),
   // id = existing /mcp card to refresh in place; absent = new card
   z.object({ type: z.literal('mcp'), sessionId: uuidSchema, id: z.string().uuid().optional(), action: mcpActionSchema.optional() }),
-  z.object({ type: z.literal('permission'), sessionId: uuidSchema, reqId: z.string().min(1), allow: z.boolean(), updatedInput: z.record(z.string(), z.unknown()).optional() }),
+  z.object({ type: z.literal('permission'), sessionId: uuidSchema, reqId: z.string().min(1), allow: z.boolean(), updatedInput: z.record(z.string(), z.unknown()).optional(), always: z.boolean().optional() }),
 ]);
 export type ClientMsgT = z.infer<typeof ClientMsg>;
 

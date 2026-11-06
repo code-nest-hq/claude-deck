@@ -39,7 +39,7 @@ export interface LiveSession {
   readonly resumed?: boolean;
   send(text: string, attachments?: string[]): void;
   interrupt(): Promise<void>;
-  answerPermission(reqId: string, allow: boolean, updatedInput?: Record<string, unknown>): void;
+  answerPermission(reqId: string, allow: boolean, updatedInput?: Record<string, unknown>, always?: boolean): void;
   setModel(model: Model): Promise<void>;
   /** plan mode: Claude only reads and proposes (ExitPlanMode asks the user to approve) */
   setPermissionMode(mode: 'default' | 'plan'): Promise<void>;

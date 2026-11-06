@@ -169,7 +169,7 @@ class Live implements LiveSession {
   private input = channel<SDKUserMessage>();
   private out = channel<EventBody>();
   readonly events: AsyncIterable<EventBody> = this.out;
-  private pending = new Map<string, (allow: boolean, why?: string, updatedInput?: Record<string, unknown>) => void>();
+  private pending = new Map<string, (allow: boolean, why?: string, updatedInput?: Record<string, unknown>, always?: boolean) => void>();
   // interrupt() enquanto attachmentBlocks() ainda lê o anexo (SSH lento): sem isto, o cancelamento não acha nada em
   // andamento pra abortar (q.interrupt() vira no-op) e a mensagem entra mesmo assim quando a leitura terminar depois.
   private cancelPendingSend: (() => void) | null = null;
@@ -191,10 +191,11 @@ class Live implements LiveSession {
     return opusGate(input.tool_input, ask);
   };
 
-  private canUseTool: CanUseTool = (toolName, input, { signal }) =>
+  private canUseTool: CanUseTool = (toolName, input, { signal, suggestions }) =>
     new Promise<PermissionResult>((resolve) => {
       const reqId = randomUUID();
-      const done = (allow: boolean, why?: string, updatedInput?: Record<string, unknown>) => {
+      const addRules = suggestions?.filter((s) => s.type === 'addRules' && s.behavior === 'allow') ?? [];
+      const done = (allow: boolean, why?: string, updatedInput?: Record<string, unknown>, always?: boolean) => {
         if (!this.pending.delete(reqId)) return;
         clearTimeout(timer);
         this.out.push({ type: 'permission.resolved', reqId, allow });
@@ -203,12 +204,14 @@ class Live implements LiveSession {
           this.out.push({ type: 'plan.mode', on: false });
         }
         // updatedInput: canal usado pelo AskUserQuestion pra devolver as respostas do usuário (mesmo mecanismo de permissão)
-        resolve(allow ? { behavior: 'allow', updatedInput: updatedInput ?? input } : { behavior: 'deny', message: why ?? 'Negado pelo usuário' });
+        // "Always allow": hand back the SDK's own suggestions (never client-supplied rules) so they land in permissions.allow
+        resolve(allow ? { behavior: 'allow', updatedInput: updatedInput ?? input, ...(always && addRules.length ? { updatedPermissions: addRules } : {}) } : { behavior: 'deny', message: why ?? 'Negado pelo usuário' });
       };
       const timer = setTimeout(() => done(false, 'Sem resposta em 10 min'), PERMISSION_TIMEOUT_MS);
       signal.addEventListener('abort', () => done(false, 'Cancelado'), { once: true });
       this.pending.set(reqId, done);
-      this.out.push({ type: 'permission.requested', reqId, toolName, input });
+      const alwaysRules = addRules.flatMap((s) => s.type === 'addRules' ? s.rules.map((r) => r.ruleContent ? `${r.toolName}(${r.ruleContent})` : r.toolName) : []);
+      this.out.push({ type: 'permission.requested', reqId, toolName, input, ...(alwaysRules.length ? { alwaysRules } : {}) });
     });
 
   constructor(o: OpenOptions, readonly resumed: boolean, private transport: Transport) {
@@ -320,7 +323,7 @@ class Live implements LiveSession {
     return f ? this.transport.tailFile(f, BG_OUTPUT_BYTES) : null;
   }
   async stopTask(taskId: string) { await this.q.stopTask(taskId); }
-  answerPermission(reqId: string, allow: boolean, updatedInput?: Record<string, unknown>) { this.pending.get(reqId)?.(allow, undefined, updatedInput); }
+  answerPermission(reqId: string, allow: boolean, updatedInput?: Record<string, unknown>, always?: boolean) { this.pending.get(reqId)?.(allow, undefined, updatedInput, always); }
 
   // fecha stdin (EOF) => o claude sai sozinho; se não sair em 2 s, encerra à força
   async close() {

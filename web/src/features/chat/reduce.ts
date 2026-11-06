@@ -172,7 +172,7 @@ export function applyEvent(c: Chat, ev: ClaudeEvent): Chat {
       break;
     }
     case 'permission.requested':
-      next.pending = [...c.pending, { reqId: ev.reqId, toolName: ev.toolName, input: ev.input }];
+      next.pending = [...c.pending, { reqId: ev.reqId, toolName: ev.toolName, input: ev.input, alwaysRules: ev.alwaysRules }];
       break;
     case 'permission.resolved':
       next.pending = c.pending.filter((p) => p.reqId !== ev.reqId);

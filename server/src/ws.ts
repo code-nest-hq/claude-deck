@@ -74,7 +74,7 @@ export function attachWs(server: Server, o: { port: number; token: string; hub: 
           case 'mcp':
             if ((await o.hub.mcp(m.sessionId, m.id, m.action && { ...m.action, redirectUri: `http://127.0.0.1:${o.port}${MCP_OAUTH_PATH}` })) === 'busy') fail('busy', 'an /mcp request is already running in this session', 'warn');
             break;
-          case 'permission': o.hub.answerPermission(client, m.sessionId, m.reqId, m.allow, m.updatedInput); break;
+          case 'permission': o.hub.answerPermission(client, m.sessionId, m.reqId, m.allow, m.updatedInput, m.always); break;
         }
       } catch (e) {
         fail('runtime', (e as Error).message, 'error', e);

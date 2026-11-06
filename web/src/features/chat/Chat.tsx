@@ -350,6 +350,7 @@ export function Chat() {
               {p.toolName !== 'request_model_upgrade' && p.toolName !== 'use_opus' && p.toolName !== 'ExitPlanMode' && <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-md border border-zinc-800/90 bg-zinc-950 p-3 font-mono text-xs text-zinc-300">{json(p.input)}</pre>}
               <div className="flex items-center gap-1.5">
                 <button className="inline-flex items-center gap-1.5 rounded-md bg-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-950 transition-all hover:bg-zinc-200 active:scale-[0.98]" onClick={() => answer(p.reqId, true)}>{p.toolName === 'ExitPlanMode' ? 'Aprovar e executar' : 'Permitir'}</button>
+                {p.alwaysRules?.length ? <button className="inline-flex items-center gap-1 rounded-md border border-zinc-700 px-2.5 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-800" title={`Adiciona a permissions.allow: ${p.alwaysRules.join(', ')}`} onClick={() => answer(p.reqId, true, undefined, true)}>Sempre permitir</button> : null}
                 <button className="inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium text-zinc-400 transition-colors hover:bg-rose-500/10 hover:text-rose-400" onClick={() => answer(p.reqId, false)}>{p.toolName === 'ExitPlanMode' ? 'Continuar planejando' : 'Negar'}</button>
               </div>
             </div>
