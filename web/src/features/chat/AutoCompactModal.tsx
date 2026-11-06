@@ -3,6 +3,7 @@ import { compactBreakEven } from '@ccui/shared';
 import { fmtTokens } from '../../lib/format';
 import { Modal, ghost, primary } from '../../lib/Modal';
 import type { Chat } from './reduce';
+import { adviceText, contextAdvice, type ContextAdvice } from './contextAdvice';
 
 // % of the autocompact window. Past ~60% quality starts degrading (context rot) and every turn re-reads the whole
 // context, so compacting here is cheaper and the summary is built from a still-complete context (the CLI's own
@@ -22,8 +23,11 @@ const breakEvenText = (tokens: number) => {
 // `dumb` = past the compaction threshold above. Derived client-side from context.usage.
 export const ZONE_WARN_TOKENS = 80_000;
 export type ContextZone = 'smart' | 'warn' | 'dumb';
-export const contextZone = (ctx: { percentage: number; totalTokens: number }): ContextZone =>
-  ctx.percentage >= COMPACT_THRESHOLD || ctx.totalTokens >= COMPACT_TOKENS ? 'dumb' : ctx.totalTokens >= ZONE_WARN_TOKENS ? 'warn' : 'smart';
+// At a task boundary (see contextAdvice) the old context is dead weight, so the zone warns earlier.
+export const ZONE_WARN_FRESH_TOKENS = 50_000;
+export const contextZone = (ctx: { percentage: number; totalTokens: number }, advice?: ContextAdvice): ContextZone =>
+  ctx.percentage >= COMPACT_THRESHOLD || ctx.totalTokens >= COMPACT_TOKENS ? 'dumb'
+    : ctx.totalTokens >= (advice?.action === 'fresh' ? ZONE_WARN_FRESH_TOKENS : ZONE_WARN_TOKENS) ? 'warn' : 'smart';
 
 const ZONE_UI: Record<ContextZone, { label: string; cls: string; tip: string }> = {
   smart: { label: 'Smart zone', cls: 'border-emerald-500/30 text-emerald-300', tip: 'Context is still small: the model is at its sharpest.' },
@@ -31,17 +35,33 @@ const ZONE_UI: Record<ContextZone, { label: string; cls: string; tip: string }> 
   dumb: { label: 'Dumb zone', cls: 'border-rose-500/30 text-rose-300', tip: 'Context is large: quality degrades and every turn re-reads it all. Click to start a new session with a handoff.' },
 };
 
-export function ZoneBadge({ ctx, onHandoff }: { ctx: Chat['context']; onHandoff: () => void }) {
+// Click opens a two-way choice (compact vs. new session with handoff); the one `contextAdvice` recommends is highlighted.
+export function ZoneBadge({ ctx, items, busy, onHandoff, onCompact }: { ctx: Chat['context']; items: Chat['items']; busy: boolean; onHandoff: () => void; onCompact: () => void }) {
+  const [open, setOpen] = useState(false);
   if (!ctx) return null;
-  const z = contextZone(ctx), u = ZONE_UI[z];
+  const advice = contextAdvice(items, ctx.totalTokens), z = contextZone(ctx, advice), u = ZONE_UI[z];
+  const fresh = advice.action === 'fresh';
+  const opt = (rec: boolean) => `block w-full rounded-md px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-zinc-800 ${rec ? 'text-zinc-100' : 'text-zinc-400'}`;
   return (
-    <button
-      className={`hidden items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-colors hover:bg-zinc-900 sm:flex ${u.cls}`}
-      title={`${u.tip} (${Math.round(ctx.percentage)}% · ${fmtTokens(ctx.totalTokens)} tokens)`}
-      onClick={z === 'smart' ? undefined : onHandoff}
-    >
-      <span className="h-1.5 w-1.5 rounded-full bg-current" />{u.label}
-    </button>
+    <div className="relative hidden sm:block">
+      <button
+        className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-colors hover:bg-zinc-900 ${u.cls}`}
+        title={`${u.tip} (${Math.round(ctx.percentage)}% · ${fmtTokens(ctx.totalTokens)} tokens)`}
+        onClick={z === 'smart' ? undefined : () => setOpen((o) => !o)}
+      >
+        <span className="h-1.5 w-1.5 rounded-full bg-current" />{u.label}
+      </button>
+      {open && z !== 'smart' && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 z-20 mt-1.5 w-64 rounded-lg border border-zinc-800 bg-zinc-950 p-1.5 shadow-xl">
+            {adviceText(advice) && <p className="px-2.5 py-1.5 text-xs leading-relaxed text-zinc-500">{adviceText(advice)}</p>}
+            <button className={opt(fresh)} onClick={() => { setOpen(false); onHandoff(); }}>Nova sessão com handoff{fresh && ' (recomendado)'}</button>
+            <button className={opt(!fresh)} disabled={busy} title={busy ? 'Aguarde o turno terminar' : undefined} onClick={() => { setOpen(false); onCompact(); }}>Compactar{!fresh && ' (recomendado)'}</button>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -83,6 +103,7 @@ export function AutoCompactModal({ sessionId, chat, enabled, onCompact, onDeclin
     return () => clearTimeout(t);
   }, [finished, failed]);
 
+  const advice = contextAdvice(chat.items, ctx?.totalTokens);
   const ask = enabled && !run && !busy && !external && !!ctx && (ctx.percentage >= COMPACT_THRESHOLD || ctx.totalTokens >= COMPACT_TOKENS) && ctx.seq > (handled.get(sessionId) ?? 0);
   if (!ask && !run && !external) return null;
 
@@ -105,8 +126,8 @@ export function AutoCompactModal({ sessionId, chat, enabled, onCompact, onDeclin
       size="sm" title="Compactar a sessão?"
       footer={<>
         <button className={ghost} onClick={() => answer(false)}>Cancelar</button>
-        <button className={ghost} title="Abre uma sessão limpa com um resumo do que foi feito, sem carregar o histórico" onClick={handoff}>Nova sessão com handoff</button>
-        <button className={primary} onClick={() => answer(true)}>Compactar</button>
+        <button className={advice.action === 'fresh' ? primary : ghost} title="Abre uma sessão limpa com um resumo do que foi feito, sem carregar o histórico" onClick={handoff}>Nova sessão com handoff</button>
+        <button className={advice.action === 'fresh' ? ghost : primary} onClick={() => answer(true)}>Compactar</button>
       </>}
     >
       <p className="text-sm leading-relaxed text-zinc-400">
@@ -114,6 +135,7 @@ export function AutoCompactModal({ sessionId, chat, enabled, onCompact, onDeclin
         Cada mensagem relê todo esse contexto: compactar evita perda de qualidade em contextos longos e reduz o custo de cada mensagem seguinte.
       </p>
       <p className="mt-2 text-sm leading-relaxed text-zinc-500">{breakEvenText(ctx!.totalTokens)}</p>
+      {advice.action === 'fresh' && <p className="mt-2 text-sm leading-relaxed text-amber-300/80">{adviceText(advice)}</p>}
     </Modal>
   );
 
