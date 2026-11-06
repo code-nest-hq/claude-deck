@@ -24,13 +24,14 @@ const { recordSession, readSessionLog, flushSessionLog } = await import('../src/
 const { redactString, redactDeep } = await import('../src/redact');
 const { buildExport } = await import('../src/export');
 const { buildSessionAudit, RATES, tokenCost, rateOf } = await import('../src/audit');
-const { compactBreakEven } = await import('@ccui/shared');
+const { compactBreakEven, baselineAdvice, suggestPlanMode, buildContextAuditPrompt } = await import('@ccui/shared');
 const { verdicts, renderSummary, MIN_SAMPLE } = await import('../src/audit-verdict');
 const { slugify, auditDir, refreshSessionAudit, readAllAudits, markAnalyzed } = await import('../src/audit-store');
 const { buildHandoff, recordHandoffGenerated, recordHandoffLink } = await import('../src/handoff');
+const { contextAdvice, usedMcpServers } = await import('../../web/src/features/chat/contextAdvice');
 const { onEnter, insideFence, fenceIfCode, insertBlock, bulletize, toMarkdown } = await import('../../web/src/features/chat/smartInput');
 const { loadPlugins, pluginArgs } = await import('../src/plugins');
-const { ROUTING_AGENTS, forbiddenModel, opusGate, OPUS_AGENT, SONNET_AGENT } = await import('../src/runtime/sdk-runtime');
+const { contextBaseline, ROUTING_AGENTS, forbiddenModel, opusGate, OPUS_AGENT, SONNET_AGENT } = await import('../src/runtime/sdk-runtime');
 
 const spec = { cwd: '/tmp/project', model: 'sonnet' as Model, effort: 'medium' as const, lean: true, routing: true, permissionMode: 'default' as const };
 const label = () => ({ projectId: 'p1', projectName: 'Test project', sessionName: 'test session' });
@@ -818,7 +819,7 @@ describe('session handoff', () => {
     assert.match(text, /git commit -m "feat: x"/);
     assert.match(text, /\[pending\] write docs/);
     assert.doesNotMatch(text, /done one/);
-    assert.match(text, /Tests added; docs are next\.$/);
+    assert.match(text, /Tests added; docs are next\.\n\n## Before continuing\n.*git status/);
     assert.match(recent, /Plan: edit the modal\./);
   });
   test('lists referenced docs, redacts secrets and adds the purpose', () => {
@@ -834,8 +835,49 @@ describe('session handoff', () => {
     assert.match(text, /## Referenced docs[^\n]*\n- \/p\/docs\/superpowers\/specs\/x\.md\n/);
     assert.doesNotMatch(text, /sk-ant-abcdefghijklmnopqrstuvwxyz0123/);
   });
+  test('lists verification commands with their pass/fail result', () => {
+    const j = [
+      line({ type: 'user', message: { content: 'ship it' } }),
+      line({ type: 'assistant', message: { content: [
+        { type: 'tool_use', id: 'a', name: 'Bash', input: { command: 'npm run typecheck' } },
+        { type: 'tool_use', id: 'b', name: 'Bash', input: { command: 'npm test' } },
+        { type: 'tool_use', id: 'c', name: 'Bash', input: { command: 'npm run build' } },
+      ] } }),
+      line({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'a', content: 'ok' }, { type: 'tool_result', tool_use_id: 'b', is_error: true, content: 'fail' }] } }),
+    ].join('\n');
+    const { text } = buildHandoff(j);
+    assert.match(text, /- npm run typecheck → passed\n- npm test → FAILED\n- npm run build → no result seen/);
+    assert.doesNotMatch(buildHandoff('').text, /Verification commands/);
+  });
   test('empty transcript still yields a usable prompt', () => {
     assert.match(buildHandoff('').text, /## Original goal\n\(none\)/);
+  });
+});
+
+describe('context advice (compact vs. fresh session)', () => {
+  type Items = Parameters<typeof contextAdvice>[0];
+  const user = { kind: 'user' as const, text: 'go' };
+  const edit = (f: string) => ({ kind: 'tool' as const, toolUseId: f, name: 'Edit', input: { file_path: f } });
+  const bash = (command: string, isError = false) => ({ kind: 'tool' as const, toolUseId: command, name: 'Bash', input: { command }, isError });
+  test('compacts by default, including with no user turn', () => {
+    assert.deepEqual(contextAdvice([]), { action: 'compact' });
+    assert.deepEqual(contextAdvice([user, edit('/a'), user, edit('/a')] as Items), { action: 'compact' });
+  });
+  test('a successful commit in the last turn means start fresh', () => {
+    assert.deepEqual(contextAdvice([user, edit('/a'), user, bash('git commit -m x')] as Items), { action: 'fresh', reason: 'commit' });
+    assert.equal(contextAdvice([user, bash('git commit -m x', true)] as Items).action, 'compact');
+  });
+  test('past 100k tokens the default is a fresh session; commit/drift reasons win', () => {
+    assert.deepEqual(contextAdvice([user, edit('/a')] as Items, 120_000), { action: 'fresh', reason: 'size' });
+    assert.deepEqual(contextAdvice([], 100_000), { action: 'fresh', reason: 'size' });
+    assert.equal(contextAdvice([user, edit('/a')] as Items, 99_999).action, 'compact');
+    assert.equal(contextAdvice([user, bash('git commit -m x')] as Items, 120_000).reason, 'commit');
+  });
+  test('last turn on disjoint files after enough earlier edits means drift', () => {
+    const earlier = [user, edit('/a'), edit('/b'), edit('/c')];
+    assert.deepEqual(contextAdvice([...earlier, user, edit('/z')] as Items), { action: 'fresh', reason: 'drift' });
+    assert.equal(contextAdvice([...earlier, user, edit('/b')] as Items).action, 'compact');
+    assert.equal(contextAdvice([user, edit('/a'), user, edit('/z')] as Items).action, 'compact'); // too little history to call it drift
   });
 });
 
@@ -943,5 +985,103 @@ describe('live token meter', () => {
     assert.equal(liveTokens(c), 125 + 132);
     c = applyEvent(c, ev({ type: 'turn.completed', totals: { costUsd: 0, input: 6, output: 21, cacheCreation: 0, cacheRead: 230 }, inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, modelUsage: {} }));
     assert.equal(liveTokens(c), 0);
+  });
+});
+
+describe('context baseline', () => {
+  const usage = {
+    categories: [
+      { name: 'System prompt', tokens: 8000, color: 'x', kind: 'used' },
+      { name: 'Messages', tokens: 50000, color: 'x', kind: 'used' },
+      { name: 'Free space', tokens: 100000, color: 'x', kind: 'free' },
+      { name: 'MCP tools', tokens: 9000, color: 'x', kind: 'used' },
+    ],
+    memoryFiles: [{ path: 'CLAUDE.md', type: 'Project', tokens: 4000 }, { path: '~/.claude/CLAUDE.md', type: 'User', tokens: 800 }],
+    mcpTools: [
+      { name: 'a', serverName: 'playwright', tokens: 2000 }, { name: 'b', serverName: 'playwright', tokens: 2500 },
+      { name: 'c', serverName: 'deferred', tokens: 9999, isLoaded: false },
+    ],
+    skills: { totalSkills: 3, includedSkills: 3, tokens: 1200, skillFrontmatter: [] },
+  } as unknown as Parameters<typeof contextBaseline>[0];
+
+  test('contextBaseline drops messages and free space, and sums loaded MCP tools per server', () => {
+    const b = contextBaseline(usage);
+    assert.equal(b.tokens, 17000);
+    assert.deepEqual(b.categories.map((c) => c.name), ['MCP tools', 'System prompt']);
+    assert.deepEqual(b.mcpServers, [{ name: 'playwright', tokens: 4500, tools: 2 }]);
+    assert.equal(b.memoryFiles[0].path, 'CLAUDE.md');
+    assert.equal(b.skillsTokens, 1200);
+  });
+  test('baselineAdvice flags long instruction files and heavy MCP servers, and says whether the MCP was used', () => {
+    const b = contextBaseline(usage);
+    const tips = baselineAdvice(b);
+    assert.ok(tips.some((t) => t.id === 'memory:CLAUDE.md'));
+    assert.ok(tips.some((t) => t.id === 'mcp:playwright' && t.text.includes('ainda não foi usado')));
+    assert.ok(!baselineAdvice(b, new Set(['playwright'])).find((t) => t.id === 'mcp:playwright')!.text.includes('ainda não foi usado'));
+    assert.ok(!tips.some((t) => t.id === 'lean'), 'a 17k baseline is normal');
+  });
+  test('baselineAdvice suggests lean only for a heavy baseline that is not already lean', () => {
+    const heavy = { tokens: 50_000, categories: [], memoryFiles: [], mcpServers: [], skillsTokens: 0 };
+    assert.ok(baselineAdvice(heavy).some((t) => t.id === 'lean'));
+    assert.equal(baselineAdvice(heavy, new Set(), true).length, 0);
+  });
+  test('usedMcpServers reads server names from mcp__server__tool calls', () => {
+    const items = [{ kind: 'tool', name: 'mcp__context7__query-docs' }, { kind: 'tool', name: 'Read' }] as unknown as Parameters<typeof usedMcpServers>[0];
+    assert.deepEqual([...usedMcpServers(items)], ['context7']);
+  });
+});
+
+describe('plan-first mode', () => {
+  test('suggestPlanMode: big multi-file work or very long prompts, never commands or short asks', () => {
+    const big = 'Preciso refatorar o módulo de pagamentos e migrar todos os endpoints do backend para o novo formato de erros, mantendo compatibilidade com o front. '.repeat(2);
+    assert.ok(suggestPlanMode(big));
+    assert.ok(suggestPlanMode('x'.repeat(700)));
+    assert.ok(!suggestPlanMode('refatora a função parseGitStatus'));
+    assert.ok(!suggestPlanMode('/compact ' + big));
+    assert.ok(!suggestPlanMode('!' + big));
+    assert.ok(!suggestPlanMode('o que faz o hub? '.repeat(14)), 'long but no work verb');
+  });
+  test('setPlanMode: applies to the live process, is remembered for the next open, and refuses mid-turn', async () => {
+    const rt = fakeRuntime({});
+    const h = hubWith(rt, false);
+    await h.attach();
+    assert.equal(await h.hub.setPlanMode(h.id, true), 'ok'); // no process yet: remembered
+    await h.hub.send(h.id, 'one');
+    await h.waitFor((e) => e.type === 'turn.completed');
+    assert.equal(rt.opened[0].permissionMode, 'plan');
+    assert.equal(await h.hub.setPlanMode(h.id, false), 'ok');
+    assert.deepEqual(rt.lives[0].modes, ['default']);
+    assert.ok(h.events().some((e) => e.type === 'plan.mode' && e.on === false));
+  });
+  test('approving ExitPlanMode state: a plan.mode off event from the runtime clears the flag', async () => {
+    const rt = fakeRuntime({});
+    const h = hubWith(rt, false);
+    await h.attach();
+    await h.hub.setPlanMode(h.id, true);
+    await h.hub.send(h.id, 'one');
+    await h.waitFor((e) => e.type === 'turn.completed');
+    rt.lives[0].out.push({ type: 'plan.mode', on: false });
+    await h.waitFor((e) => e.type === 'plan.mode' && e.on === false);
+    h.hub.detach(h.client, h.id);
+    await h.attach();
+    const snap = h.msgs.filter((m) => m.type === 'snapshot').at(-1);
+    assert.equal(snap?.type === 'snapshot' && snap.plan, false);
+  });
+});
+
+describe('context audit prompt', () => {
+  const b = { tokens: 30_000, categories: [{ name: 'System prompt', tokens: 9000 }], memoryFiles: [{ path: 'CLAUDE.md', tokens: 4000 }], mcpServers: [{ name: 'playwright', tokens: 4500, tools: 20 }, { name: 'context7', tokens: 800, tools: 2 }], skillsTokens: 1200 };
+  test('carries the measured numbers, flags unused MCPs and stays read-only', () => {
+    const t = buildContextAuditPrompt(b, new Set(['context7']));
+    assert.match(t, /Do NOT edit/);
+    assert.match(t, /CLAUDE\.md: 4\.0k/);
+    assert.match(t, /playwright: 4\.5k, 20 tools, not used there/);
+    assert.match(t, /context7: 0\.8k, 2 tools, used/);
+  });
+  test('works without a measurement and appends the extra instructions last', () => {
+    const t = buildContextAuditPrompt(undefined, new Set(), '  foque nos MCPs  ');
+    assert.match(t, /No measurement available/);
+    assert.ok(t.trimEnd().endsWith('foque nos MCPs'));
+    assert.ok(!buildContextAuditPrompt(undefined).includes('Extra instructions'));
   });
 });

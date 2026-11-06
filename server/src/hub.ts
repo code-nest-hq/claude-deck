@@ -35,6 +35,7 @@ interface Entry {
   turnEndedAt?: number; // when the last turn finished, to tell whether the prompt cache is still warm
   compacting?: boolean; // a compact is in flight; the SDK re-sends status 'compacting' every ~30s, only the first counts
   subUsage?: Map<string, Extract<EventBody, { type: 'subagent.usage' }>>; // this turn's subagent API messages by id (a message arrives once per content block)
+  plan?: boolean; // plan mode on (applied to the live process, or when it opens)
   compactBy?: 'user' | 'deck-auto'; // who asked for the /compact in flight; none when its 'started' arrives = the CLI's own auto-compact
 }
 
@@ -101,7 +102,7 @@ export class SessionHub {
       e.prevModelUsage = stored.modelUsage; // idem por-modelo, pro 1º turno desta execução calcular o delta certo (só o turno, não a sessão)
     }
     // estado lido DEPOIS do await: eventos emitidos durante a leitura já foram enviados a `c` e o cliente os ignora até hidratar
-    c.send({ type: 'snapshot', sessionId: id, history, state: e.state, lastSeq: e.seq, totals: e.totals ?? ZERO_TOTALS, pending: [...e.pending.values()], bgTasks: e.bgTasks });
+    c.send({ type: 'snapshot', sessionId: id, history, state: e.state, lastSeq: e.seq, totals: e.totals ?? ZERO_TOTALS, pending: [...e.pending.values()], bgTasks: e.bgTasks, plan: !!e.plan });
   }
 
   async attach(c: Client, id: string, afterSeq?: number) {
@@ -147,7 +148,7 @@ export class SessionHub {
     }
     if (!e.live) {
       try {
-        e.live = await this.runtimeFor(id).open({ ...spec, sessionId: id });
+        e.live = await this.runtimeFor(id).open({ ...spec, permissionMode: e.plan && spec.permissionMode !== 'bypassPermissions' ? 'plan' : spec.permissionMode, sessionId: id });
       } catch (err) {
         this.emit(id, e, { type: 'error', code: 'runtime', message: (err as Error).message });
         this.setState(id, e, 'idle');
@@ -228,6 +229,17 @@ export class SessionHub {
     if (e.state === 'running' || e.state === 'awaiting_permission') return 'busy';
     recordSession(id, 'action', { action: 'reload' });
     return e.live.reload();
+  }
+
+  // plan-first toggle. Refused mid-turn (the mode would change under a running turn) and in bypass projects (the SDK skips the gate there)
+  async setPlanMode(id: string, on: boolean): Promise<'ok' | 'busy'> {
+    if (this.spec(id).permissionMode === 'bypassPermissions') throw new Error('plan mode is not available in bypass projects');
+    const e = this.entry(id);
+    if (e.state === 'running' || e.state === 'awaiting_permission') return 'busy';
+    recordSession(id, 'action', { action: on ? 'plan.on' : 'plan.off' });
+    if (e.live) await e.live.setPermissionMode(on ? 'plan' : 'default');
+    this.emit(id, e, { type: 'plan.mode', on });
+    return 'ok';
   }
 
   // background task modal: null = no live process (the tasks died with it)
@@ -361,6 +373,9 @@ export class SessionHub {
         break;
       case 'context.usage':
         e.ctxTokens = body.totalTokens;
+        break;
+      case 'plan.mode':
+        e.plan = body.on;
         break;
       case 'turn.completed':
         e.turnEndedAt = Date.now();

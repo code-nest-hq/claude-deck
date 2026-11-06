@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { createSdkMcpServer, query, tool, type AgentDefinition, type CanUseTool, type HookCallback, type McpServerStatus, type PermissionResult, type Query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
-import { EFFORTS, MODELS, type EventBody, type HistoryItem, type McpAction, type McpServerView, type Model, type ModelUsage, type PlanUsage, type ShellResult, type SlashCommandInfo, type UsageTotals } from '@ccui/shared';
+import { createSdkMcpServer, query, tool, type AgentDefinition, type CanUseTool, type HookCallback, type McpServerStatus, type PermissionResult, type Query, type SDKControlGetContextUsageResponse, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import { EFFORTS, MODELS, type ContextBaseline, type EventBody, type HistoryItem, type McpAction, type McpServerView, type Model, type ModelUsage, type PlanUsage, type ShellResult, type SlashCommandInfo, type UsageTotals } from '@ccui/shared';
 import { z } from 'zod';
 import { visibleCommands } from '../commands';
 import { HANDOFF_SYSTEM_PROMPT } from '../handoff';
@@ -147,6 +147,24 @@ export async function opusGate(
   return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow', updatedInput: { ...input, subagent_type: SONNET_AGENT } } };
 }
 
+// The conversation grows by itself; this is only what the session loads before it (and keeps loading on every turn).
+export function contextBaseline(u: SDKControlGetContextUsageResponse): ContextBaseline {
+  const fixed = u.categories.filter((c) => c.kind === 'used' && !/message/i.test(c.name)).sort((a, b) => b.tokens - a.tokens);
+  const servers = new Map<string, { tokens: number; tools: number }>();
+  for (const t of u.mcpTools) {
+    if (t.isLoaded === false) continue; // deferred schemas are not in the window
+    const s = servers.get(t.serverName) ?? { tokens: 0, tools: 0 };
+    servers.set(t.serverName, { tokens: s.tokens + t.tokens, tools: s.tools + 1 });
+  }
+  return {
+    tokens: fixed.reduce((a, c) => a + c.tokens, 0),
+    categories: fixed.map((c) => ({ name: c.name, tokens: c.tokens })),
+    memoryFiles: u.memoryFiles.map((m) => ({ path: m.path, tokens: m.tokens })).sort((a, b) => b.tokens - a.tokens),
+    mcpServers: [...servers].map(([name, v]) => ({ name, ...v })).sort((a, b) => b.tokens - a.tokens),
+    skillsTokens: u.skills?.tokens ?? 0,
+  };
+}
+
 class Live implements LiveSession {
   private input = channel<SDKUserMessage>();
   private out = channel<EventBody>();
@@ -158,6 +176,7 @@ class Live implements LiveSession {
   // task_id (interno do SDK) -> taskId (tool_use_id do Task tool) — só task_updated/task_progress precisam disto,
   // pois não trazem tool_use_id; populado quando task_started passa pelo loop em run().
   private taskIds = new Map<string, string>();
+  private baselineSent = false;
   private bg = new BgTasks();
   private stderrTail = '';
   private q: Query;
@@ -179,6 +198,10 @@ class Live implements LiveSession {
         if (!this.pending.delete(reqId)) return;
         clearTimeout(timer);
         this.out.push({ type: 'permission.resolved', reqId, allow });
+        if (allow && toolName === 'ExitPlanMode') { // plan approved: back to normal permissions so the execution can edit
+          void this.q.setPermissionMode('default').catch(() => {});
+          this.out.push({ type: 'plan.mode', on: false });
+        }
         // updatedInput: canal usado pelo AskUserQuestion pra devolver as respostas do usuário (mesmo mecanismo de permissão)
         resolve(allow ? { behavior: 'allow', updatedInput: updatedInput ?? input } : { behavior: 'deny', message: why ?? 'Negado pelo usuário' });
       };
@@ -250,6 +273,11 @@ class Live implements LiveSession {
         if (m.type === 'result') {
           const u = await this.q.getContextUsage({ detail: 'summary' }).catch(() => null);
           if (u) this.out.push({ type: 'context.usage', percentage: u.percentage, totalTokens: u.totalTokens, maxTokens: u.rawMaxTokens });
+          if (u && !this.baselineSent) {
+            this.baselineSent = true; // 'full' is heavier than 'summary', so the fixed load is read once per process
+            const full = await this.q.getContextUsage({ detail: 'full' }).catch(() => null);
+            if (full) this.out.push({ type: 'context.baseline', baseline: contextBaseline(full) });
+          }
         }
       }
     } catch (e) {
@@ -280,6 +308,7 @@ class Live implements LiveSession {
     await this.q.interrupt();
   }
   async setModel(model: Model) { await this.q.setModel(model); }
+  async setPermissionMode(mode: 'default' | 'plan') { await this.q.setPermissionMode(mode); }
   mcp(action?: McpAction) { return mcpStatus(this.q, action); }
   async reload() {
     await this.q.reloadSkills();

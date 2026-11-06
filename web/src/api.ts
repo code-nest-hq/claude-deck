@@ -43,6 +43,7 @@ export const api = {
   commands: (pid: string) => req<SlashCommandInfo[]>('GET', `/api/projects/${pid}/commands`),
   plugins: (pid: string) => req<PluginsView>('GET', `/api/projects/${pid}/plugins`),
   pluginAction: (pid: string, b: PluginAction) => req<PluginActionResult>('POST', `/api/projects/${pid}/plugins`, b),
+  setPlan: (pid: string, sid: string, on: boolean) => req<{ plan: boolean }>('POST', `/api/projects/${pid}/sessions/${sid}/plan`, { on }),
   reload: (pid: string, sid: string) => req<{ live: boolean; plugins?: number; errors?: number }>('POST', `/api/projects/${pid}/sessions/${sid}/reload`),
   bgOutput: (pid: string, sid: string, taskId: string) => req<{ live: boolean; output: string | null }>('GET', `/api/projects/${pid}/sessions/${sid}/bg/${encodeURIComponent(taskId)}/output`),
   stopBgTask: (pid: string, sid: string, taskId: string) => req<{ stopped: boolean }>('POST', `/api/projects/${pid}/sessions/${sid}/bg/${encodeURIComponent(taskId)}/stop`),

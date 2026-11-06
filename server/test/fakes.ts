@@ -45,6 +45,8 @@ export class FakeLive implements LiveSession {
     if (this.closed) throw new Error('process is gone');
     this.models.push(m);
   }
+  modes: string[] = [];
+  async setPermissionMode(m: 'default' | 'plan') { this.modes.push(m); }
   async mcp() { return { servers: [] }; }
   async reload() { return { plugins: 0, errors: 0 }; }
   async bgOutput() { return null; }

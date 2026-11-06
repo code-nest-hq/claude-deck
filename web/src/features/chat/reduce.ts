@@ -1,4 +1,4 @@
-import { ZERO_TOTALS, type BgTask, type ClaudeEvent, type McpServerView, type Model, type ModelUsage, type PendingPermission, type ServerMsg, type SessionState, type UsageTotals } from '@ccui/shared';
+import { ZERO_TOTALS, type BgTask, type ClaudeEvent, type ContextBaseline, type McpServerView, type Model, type ModelUsage, type PendingPermission, type ServerMsg, type SessionState, type UsageTotals } from '@ccui/shared';
 
 // ts = event time (ms), set by applyEvent; history from the snapshot has none
 export type Item = (
@@ -37,6 +37,8 @@ export interface Chat {
   turnPhaseAt: number;
   // last context occupancy (seq = its event, so the auto-compact prompt fires once per turn)
   context?: { percentage: number; totalTokens: number; maxTokens: number; seq: number; ts: number };
+  plan?: boolean; // plan mode on
+  baseline?: ContextBaseline; // fixed load of the session (system prompt, tools, CLAUDE.md, skills, MCP), once per live process
   compact?: { phase: 'running' | 'done' | 'failed'; startedAt: number; seq: number; preTokens?: number; postTokens?: number; message?: string };
 }
 
@@ -45,6 +47,7 @@ export const emptyChat = (): Chat => ({ hydrated: false, items: [], state: 'idle
 export function applySnapshot(s: Extract<ServerMsg, { type: 'snapshot' }>): Chat {
   return {
     hydrated: true,
+    plan: s.plan,
     items: s.history.map((h) => ({ kind: h.role, text: h.text, ts: h.ts })),
     state: s.state,
     lastSeq: s.lastSeq,
@@ -189,6 +192,12 @@ export function applyEvent(c: Chat, ev: ClaudeEvent): Chat {
       break;
     case 'context.usage':
       next.context = { percentage: ev.percentage, totalTokens: ev.totalTokens, maxTokens: ev.maxTokens, seq: ev.seq, ts: ev.ts };
+      break;
+    case 'plan.mode':
+      next.plan = ev.on;
+      break;
+    case 'context.baseline':
+      next.baseline = ev.baseline;
       break;
     case 'compact':
       next.compact = ev.phase === 'started'
