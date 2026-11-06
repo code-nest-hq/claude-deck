@@ -97,7 +97,7 @@ export const lastConnectionBody = z.object({ connectionId: z.string().min(1) });
 
 // ---- eventos (contrato único entre backend e React) ----
 export type SessionState = 'idle' | 'running' | 'awaiting_permission' | 'exited';
-export interface PendingPermission { reqId: string; toolName: string; input: unknown }
+export interface PendingPermission { reqId: string; toolName: string; input: unknown; /** rules "Always allow" would add to permissions.allow; absent when the SDK offered no suggestion */ alwaysRules?: string[] }
 // a task Claude left running in the background (Bash run_in_background, backgrounded subagent, monitor...); taskId = SDK task_id
 export interface BgTask {
   taskId: string; toolUseId?: string; kind: string; description: string;
@@ -124,9 +124,16 @@ export type EventBody =
   | ({ type: 'permission.requested' } & PendingPermission)
   | { type: 'permission.resolved'; reqId: string; allow: boolean }
   // modelUsage: no evento entregue ao cliente é o gasto SÓ deste turno, por modelo (delta calculado em hub.ts)
-  | { type: 'turn.completed'; totals: UsageTotals; inputTokens: number; outputTokens: number; cacheCreationTokens: number; cacheReadTokens: number; modelUsage: Record<string, ModelUsage> }
+  // subagent = this turn's subagent share (estimated at RATES: the SDK result has no per-agent cost); set by the hub
+  | { type: 'turn.completed'; totals: UsageTotals; inputTokens: number; outputTokens: number; cacheCreationTokens: number; cacheReadTokens: number; modelUsage: Record<string, ModelUsage>; subagent?: { costUsd: number; tokens: number } }
+  // one subagent API message's usage; consumed by the hub (summed into turn.completed.subagent), never sent to clients
+  | { type: 'subagent.usage'; messageId: string; model: string; input: number; output: number; cacheCreation: number; cacheRead: number }
   // context window occupancy after a turn (SDK getContextUsage 'summary', no token cost); percentage is of the autocompact window
+  // plan mode on/off for the session (UI toggle, or the runtime leaving it when the user approves ExitPlanMode)
+  | { type: 'plan.mode'; on: boolean }
   | { type: 'context.usage'; percentage: number; totalTokens: number; maxTokens: number }
+  // what fills the context before the conversation does (system prompt, tools, CLAUDE.md, skills, MCP); sent once per live process
+  | { type: 'context.baseline'; baseline: ContextBaseline }
   // `/compact` (manual or the CLI's own auto-compact): no real progress is reported, only start and end
   | { type: 'compact'; phase: 'started' | 'done' | 'failed'; preTokens?: number; postTokens?: number; message?: string }
   | { type: 'shell.started'; id: string; command: string }
@@ -201,13 +208,13 @@ export const ClientMsg = z.discriminatedUnion('type', [
   z.object({ type: z.literal('shell'), sessionId: uuidSchema, command: z.string().trim().min(1).max(10_000) }),
   // id = existing /mcp card to refresh in place; absent = new card
   z.object({ type: z.literal('mcp'), sessionId: uuidSchema, id: z.string().uuid().optional(), action: mcpActionSchema.optional() }),
-  z.object({ type: z.literal('permission'), sessionId: uuidSchema, reqId: z.string().min(1), allow: z.boolean(), updatedInput: z.record(z.string(), z.unknown()).optional() }),
+  z.object({ type: z.literal('permission'), sessionId: uuidSchema, reqId: z.string().min(1), allow: z.boolean(), updatedInput: z.record(z.string(), z.unknown()).optional(), always: z.boolean().optional() }),
 ]);
 export type ClientMsgT = z.infer<typeof ClientMsg>;
 
 export type ServerMsg =
   | { type: 'ready' }
-  | { type: 'snapshot'; sessionId: string; history: HistoryItem[]; state: SessionState; lastSeq: number; totals: UsageTotals; pending: PendingPermission[]; bgTasks: BgTask[] }
+  | { type: 'snapshot'; sessionId: string; history: HistoryItem[]; state: SessionState; lastSeq: number; totals: UsageTotals; pending: PendingPermission[]; bgTasks: BgTask[]; plan: boolean }
   | { type: 'event'; event: ClaudeEvent }
   | { type: 'error'; code: string; message: string; errorId?: string }
   | { type: 'log'; entry: LogEntry }
@@ -255,6 +262,12 @@ export const RATES: Record<'haiku' | 'sonnet', Rates> = {
   sonnet: { input: 2, output: 10, cacheWrite: 4, cacheRead: 0.2 },
 };
 
+/** estimated cost of one API message's usage; anything that is not Haiku is priced as Sonnet (the only other session model, Opus is subagent-only) */
+export function usageCostUsd(model: string, u: { input: number; output: number; cacheCreation: number; cacheRead: number }): number {
+  const r = model.includes('haiku') ? RATES.haiku : RATES.sonnet;
+  return (u.input * r.input + u.output * r.output + u.cacheCreation * r.cacheWrite + u.cacheRead * r.cacheRead) / 1e6;
+}
+
 /** typical size of a context right after /compact (audit: 10k-29k tokens, median ~21k) */
 export const POST_COMPACT_TOKENS = 22_000;
 /**
@@ -267,4 +280,86 @@ export function compactBreakEven(preTokens: number): { costUsd: number; turns: n
   const costUsd = (preTokens * r.cacheRead + post * r.output + post * (r.cacheWrite - r.cacheRead)) / 1e6;
   const perTurn = (Math.max(0, preTokens - post) * r.cacheRead) / 1e6;
   return { costUsd, turns: perTurn > 0 ? Math.ceil(costUsd / perTurn) : Infinity };
+}
+
+
+/** Fixed context load of a session, from the SDK's `getContextUsage({ detail: 'full' })` minus the message history. */
+export interface ContextBaseline {
+  tokens: number; // everything except the conversation itself
+  categories: Array<{ name: string; tokens: number }>; // 'used' categories only, largest first
+  memoryFiles: Array<{ path: string; tokens: number }>; // CLAUDE.md-style files
+  mcpServers: Array<{ name: string; tokens: number; tools: number }>; // loaded MCP tool schemas, summed per server
+  skillsTokens: number;
+}
+
+export type BaselineTip = { id: string; text: string };
+
+// Thresholds for baselineAdvice (tokens). A bare Claude Code session is ~15-20k; these flag what the user controls.
+export const BASELINE_HEAVY_TOKENS = 35_000;
+export const MEMORY_FILE_TOKENS = 3_000;
+export const MEMORY_TOTAL_TOKENS = 5_000;
+export const MCP_SERVER_TOKENS = 3_000;
+export const SKILLS_TOKENS = 3_000;
+
+/**
+ * Actionable tips about the fixed load, which is paid again on every message (cheap as cache read, but it also eats the
+ * smart zone). `usedMcp` = MCP server names already called in this session; an unused heavy server is the best candidate to drop.
+ */
+export function baselineAdvice(b: ContextBaseline, usedMcp: ReadonlySet<string> = new Set(), lean = false): BaselineTip[] {
+  const k = (n: number) => `${(n / 1000).toFixed(1)}k`;
+  const tips: BaselineTip[] = [];
+  for (const m of b.memoryFiles) if (m.tokens >= MEMORY_FILE_TOKENS) tips.push({ id: `memory:${m.path}`, text: `${m.path} ocupa ${k(m.tokens)} tokens em toda mensagem. Deixe só regras universais nele e mova procedimentos para docs/ lidos sob demanda.` });
+  const memTotal = b.memoryFiles.reduce((a, m) => a + m.tokens, 0);
+  if (memTotal >= MEMORY_TOTAL_TOKENS && !tips.some((t) => t.id.startsWith('memory:'))) tips.push({ id: 'memory:total', text: `Os arquivos de instruções somam ${k(memTotal)} tokens fixos. Considere enxugar ou mover detalhes para docs/ sob demanda.` });
+  for (const s of b.mcpServers) if (s.tokens >= MCP_SERVER_TOKENS) {
+    tips.push({ id: `mcp:${s.name}`, text: usedMcp.has(s.name) ? `O MCP "${s.name}" custa ${k(s.tokens)} tokens fixos (${s.tools} tools).` : `O MCP "${s.name}" custa ${k(s.tokens)} tokens fixos (${s.tools} tools) e ainda não foi usado nesta sessão. Desative-o se não for necessário.` });
+  }
+  if (b.skillsTokens >= SKILLS_TOKENS) tips.push({ id: 'skills', text: `As descrições de skills somam ${k(b.skillsTokens)} tokens fixos. Desative as que este projeto não usa.` });
+  if (!lean && b.tokens >= BASELINE_HEAVY_TOKENS) tips.push({ id: 'lean', text: `A carga inicial é ${k(b.tokens)} tokens antes da primeira mensagem. Se a tarefa for simples, o modo Lean evita carregar instruções, skills e plugins.` });
+  return tips;
+}
+
+
+// Planning first pays off on big, vague or multi-file work (the Explore -> Plan -> Execute cycle) and is wasted on a one-liner.
+// Deliberately conservative: a false hit is only a dismissible hint. Client-side, before the message is sent.
+const PLAN_VERBS = /\b(implementa|implement|refator|refactor|migra|migrat|integra|integrat|arquitet|architect|redesenh|redesign|reescrev|rewrit|construa|build|cri[ae]\s+(?:um|uma|o|a)\s+(?:novo|nova|sistema|m[oó]dulo|feature|funcionalidade|endpoint|tela|fluxo))/i;
+const PLAN_SCOPE = /\b(todos?|todas?|toda|all|every|v[aá]rios|v[aá]rias|multiple|m[oó]dulos?|modules?|arquivos|files|backend e (?:o )?front|front ?end e (?:o )?back)\b/i;
+export const PLAN_MIN_CHARS = 200;
+export const PLAN_LONG_CHARS = 600;
+export function suggestPlanMode(text: string): boolean {
+  const t = text.trim();
+  if (t.startsWith('/') || t.startsWith('!')) return false;
+  if (t.length >= PLAN_LONG_CHARS) return true;
+  return t.length >= PLAN_MIN_CHARS && PLAN_VERBS.test(t) && PLAN_SCOPE.test(t);
+}
+
+
+/**
+ * Prompt for the "Analisar contexto" session: a read-only (plan mode) review of what can be trimmed from the fixed context.
+ * The measured numbers come from the source session's `context.baseline`, so Claude does not have to guess or run /context.
+ * `usedMcp` = MCP servers the source session already called; `extra` = the user's own instructions, appended last.
+ */
+export function buildContextAuditPrompt(baseline: ContextBaseline | undefined, usedMcp: ReadonlySet<string> = new Set(), extra = ''): string {
+  const k = (n: number) => `${(n / 1000).toFixed(1)}k`;
+  const measured = baseline
+    ? [
+        `Fixed load measured in the source session: ${k(baseline.tokens)} tokens before the conversation.`,
+        ...baseline.categories.slice(0, 8).map((c) => `- ${c.name}: ${k(c.tokens)}`),
+        baseline.memoryFiles.length ? `Instruction files (CLAUDE.md):\n${baseline.memoryFiles.map((m) => `- ${m.path}: ${k(m.tokens)}`).join('\n')}` : '',
+        baseline.mcpServers.length ? `MCP servers (fixed tokens; "used" = already called in the source session):\n${baseline.mcpServers.map((m) => `- ${m.name}: ${k(m.tokens)}, ${m.tools} tools, ${usedMcp.has(m.name) ? 'used' : 'not used there'}`).join('\n')}` : '',
+        baseline.skillsTokens ? `Skill descriptions: ${k(baseline.skillsTokens)}` : '',
+      ].filter(Boolean).join('\n')
+    : 'No measurement available (the source session has not had a turn yet). Estimate by reading the files.';
+  return [
+    'Analyze what I can cut from the fixed context load of my sessions. Do NOT edit, delete or disable anything: only read and propose.',
+    '',
+    measured,
+    '',
+    '1. CLAUDE.md (global at ~/.claude/CLAUDE.md and the project one): list each section with its approximate size in tokens. Mark what does not need to apply in every session (long procedures, history, examples, details of a single area) and propose moving it to docs/ with a one-line pointer left behind. Point out duplicated or contradictory rules and anything derivable from the code or git. Keep the hard, verifiable rules (security, language, test commands, prohibitions). Show the proposed diff and the estimated savings.',
+    '2. MCPs: for each server, confirm whether it was actually used by searching for "mcp__<server>__" calls in the .jsonl transcripts under ~/.claude/projects/ (last 30 days, counted per server and project). Classify as keep, rarely used (enable only when needed) or never used (disable), and say how to disable each one (exact command or file) and in which scope (user, project, local or plugin).',
+    '3. Skills and plugins: point out the ones never invoked that have a large description.',
+    '',
+    'Deliver a table sorted by token savings and the change plan for me to approve item by item.',
+    extra.trim() ? `\nExtra instructions from the user:\n${extra.trim()}` : '',
+  ].filter((l, i, a) => l !== '' || a[i - 1] !== '').join('\n');
 }

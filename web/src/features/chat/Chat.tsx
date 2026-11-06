@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { HandoffTrigger, ModelUsage, SlashCommandInfo } from '@ccui/shared';
+import { baselineAdvice, suggestPlanMode, type HandoffTrigger, type ModelUsage, type SlashCommandInfo } from '@ccui/shared';
 import { fmtTokens } from '../../lib/format';
+import { api } from '../../api';
 import { useApp } from '../../store';
 import { IconArrowLeft, IconLock, IconPaperclip, IconSend, IconShuffle } from '../../lib/icons';
 import { ActivityPills } from '../home/Activity';
@@ -8,7 +9,9 @@ import { AskUserQuestionModal, isAskUserQuestion } from './AskUserQuestionModal'
 import { AttachMenu } from './AttachMenu';
 import { AttachmentsModal, NO_ATTACHMENTS } from './AttachmentsModal';
 import { AutoCompactModal, ColdCacheModal, ZoneBadge, isColdCache } from './AutoCompactModal';
+import { usedMcpServers } from './contextAdvice';
 import { HandoffModal } from './HandoffModal';
+import { ContextAuditModal } from './ContextAuditModal';
 import { CommandsPanel } from './CommandsPanel';
 import { GitBar } from './GitBar';
 import { Markdown } from './Markdown';
@@ -71,7 +74,7 @@ function ItemView({ it, busy, bypass, commands }: { it: Item; busy: boolean; byp
   if (it.kind === 'error') return <ErrorItem text={it.text} errorId={it.errorId} />;
   if (it.kind === 'shell') return <ShellCard it={it} busy={busy} />;
   if (it.kind === 'mcp') return null; // rendered by McpModal
-  if (it.kind === 'turn') return <TurnSummary modelUsage={it.modelUsage} skills={it.skills} commands={commands} bypass={bypass} />;
+  if (it.kind === 'turn') return <TurnSummary modelUsage={it.modelUsage} skills={it.skills} subagent={it.subagent} commands={commands} bypass={bypass} />;
   return <ToolCard it={it} />;
 }
 
@@ -89,7 +92,7 @@ function TurnLoading({ phase, tool, startedAt, now }: { phase: 'routing' | 'thin
   );
 }
 
-function TurnSummary({ modelUsage, skills, commands, bypass }: { modelUsage: Record<string, ModelUsage>; skills: SkillUse[]; commands?: SlashCommandInfo[]; bypass: boolean }) {
+function TurnSummary({ modelUsage, skills, subagent, commands, bypass }: { modelUsage: Record<string, ModelUsage>; skills: SkillUse[]; subagent?: { costUsd: number; tokens: number }; commands?: SlashCommandInfo[]; bypass: boolean }) {
   const [open, setOpen] = useState(false);
   // a typed "/name" only counts when it is a known skill (builtins like /compact aren't skills)
   const used = skills.filter((s) => s.by === 'claude' || commands?.some((c) => c.name === s.name && !c.builtin));
@@ -99,6 +102,7 @@ function TurnSummary({ modelUsage, skills, commands, bypass }: { modelUsage: Rec
   return (
     <div className="flex items-center justify-center gap-2 text-center font-mono text-[11px] text-zinc-600">
       turno concluído — ${cost.toFixed(4)} · {fmtTokens(tok)} tokens · {models}
+      {subagent && cost > 0 && <span title="Estimated at list rates; the part of this turn's cost spent inside subagents">· subagente ~${subagent.costUsd.toFixed(4)} ({Math.min(100, Math.round((subagent.costUsd / cost) * 100))}%)</span>}
       {used.length > 0 && (
         <button className="rounded-sm border border-violet-500/25 bg-violet-500/10 px-1.5 py-0.5 text-[10px] tracking-wider text-violet-300/90 hover:bg-violet-500/20" onClick={() => setOpen(true)}>
           {used.length === 1 ? 'skill invocada' : `${used.length} skills invocadas`}
@@ -138,6 +142,9 @@ export function Chat() {
   const [sel, setSel] = useState(0);
   const [dismissed, setDismissed] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
+  const [auditOpen, setAuditOpen] = useState(false);
+  const [planHintOff, setPlanHintOff] = useState(false); // the plan hint was dismissed for this chat view
+  const baselineTips = chat?.baseline ? baselineAdvice(chat.baseline, usedMcpServers(chat.items), !!project?.lean).length : 0;
   const [usageOpen, setUsageOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [handoffTrigger, setHandoffTrigger] = useState<HandoffTrigger | null>(null);
@@ -261,7 +268,10 @@ export function Chat() {
           <h1 className="min-w-0 truncate text-sm tracking-tight text-zinc-600">{project?.name} / <span className="font-medium text-zinc-100">{name}</span></h1>
         </div>
         <div className="flex items-center gap-3">
-          <ZoneBadge ctx={chat.context} onHandoff={() => setHandoffTrigger('zone-badge')} />
+          <ZoneBadge ctx={chat.context} items={chat.items} busy={chat.state === 'running' || chat.state === 'awaiting_permission'} onHandoff={() => setHandoffTrigger('zone-badge')} onCompact={() => send('/compact', false, 'auto-compact')} />
+          {baselineTips > 0 && <button className="hidden rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-xs text-amber-300 transition-colors hover:bg-amber-500/20 sm:block" title="A carga fixa do contexto pode ser reduzida (abre o status)" onClick={() => setStatusOpen(true)}>⚠ {baselineTips} {baselineTips === 1 ? 'dica' : 'dicas'} de contexto</button>}
+          {!project?.bypass && <button className={`hidden rounded-md border px-2 py-1 text-xs transition-colors sm:block ${chat?.plan ? 'border-sky-500/40 bg-sky-500/15 text-sky-300' : 'border-zinc-800/60 bg-zinc-900/50 text-zinc-500 hover:text-zinc-300'}`} title="Modo plano: Claude só lê e propõe um plano; você aprova antes de qualquer edição" disabled={busy || !project} onClick={() => project && active && void api.setPlan(project.id, active.sessionId, !chat?.plan).catch(() => {})}>Plano {chat?.plan ? 'ligado' : 'desligado'}</button>}
+          <button className="hidden rounded-md border border-zinc-800/60 bg-zinc-900/50 px-2 py-1 text-xs text-zinc-400 transition-colors hover:text-zinc-200 sm:block" title="Abre uma sessão em modo plano que analisa o que enxugar no CLAUDE.md, MCPs e skills" onClick={() => setAuditOpen(true)}>Analisar contexto</button>
           <ActivityPills />
           <button className="hidden items-center gap-2 rounded-md border border-zinc-800/60 bg-zinc-900/50 px-2.5 py-1 font-mono text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-900 sm:flex" title="Detailed usage (input, output, cache)" onClick={() => setUsageOpen(true)}>
             <span className="text-zinc-300">${chat.totals.costUsd.toFixed(4)}</span>
@@ -328,16 +338,20 @@ export function Chat() {
               <div className="text-xs font-semibold text-zinc-100">
                 {p.toolName === 'request_model_upgrade'
                   ? <>Claude quer trocar pra <span className="text-zinc-100">Sonnet 5</span> — {String((p.input as { reason?: unknown } | null)?.reason ?? '')}</>
+                  : p.toolName === 'ExitPlanMode'
+                  ? <>Claude propôs um plano. Aprovar libera as edições.</>
                   : p.toolName === 'use_opus'
                   ? <>Claude quer usar <span className="text-zinc-100">Opus</span> (background) pra análise arquitetural. Negar usa Sonnet.</>
                   : <>Permitir <code className="rounded bg-zinc-800/80 px-1 py-0.5 font-mono text-[11px]">{p.toolName}</code>?</>}
               </div>
             </div>
             <div className="flex flex-col gap-3 p-4">
-              {p.toolName !== 'request_model_upgrade' && p.toolName !== 'use_opus' && <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-md border border-zinc-800/90 bg-zinc-950 p-3 font-mono text-xs text-zinc-300">{json(p.input)}</pre>}
+              {p.toolName === 'ExitPlanMode' && <div className="max-h-96 overflow-auto rounded-md border border-zinc-800/90 bg-zinc-950 p-3 text-sm"><Markdown text={String((p.input as { plan?: unknown } | null)?.plan ?? '')} /></div>}
+              {p.toolName !== 'request_model_upgrade' && p.toolName !== 'use_opus' && p.toolName !== 'ExitPlanMode' && <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-md border border-zinc-800/90 bg-zinc-950 p-3 font-mono text-xs text-zinc-300">{json(p.input)}</pre>}
               <div className="flex items-center gap-1.5">
-                <button className="inline-flex items-center gap-1.5 rounded-md bg-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-950 transition-all hover:bg-zinc-200 active:scale-[0.98]" onClick={() => answer(p.reqId, true)}>Permitir</button>
-                <button className="inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium text-zinc-400 transition-colors hover:bg-rose-500/10 hover:text-rose-400" onClick={() => answer(p.reqId, false)}>Negar</button>
+                <button className="inline-flex items-center gap-1.5 rounded-md bg-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-950 transition-all hover:bg-zinc-200 active:scale-[0.98]" onClick={() => answer(p.reqId, true)}>{p.toolName === 'ExitPlanMode' ? 'Aprovar e executar' : 'Permitir'}</button>
+                {p.alwaysRules?.length ? <button className="inline-flex items-center gap-1 rounded-md border border-zinc-700 px-2.5 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-800" title={`Adiciona a permissions.allow: ${p.alwaysRules.join(', ')}`} onClick={() => answer(p.reqId, true, undefined, true)}>Sempre permitir</button> : null}
+                <button className="inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium text-zinc-400 transition-colors hover:bg-rose-500/10 hover:text-rose-400" onClick={() => answer(p.reqId, false)}>{p.toolName === 'ExitPlanMode' ? 'Continuar planejando' : 'Negar'}</button>
               </div>
             </div>
           </div>
@@ -362,9 +376,19 @@ export function Chat() {
       {statusOpen && project && <StatusModal sessionId={active.sessionId} name={name} project={project} config={config} chat={chat} onClose={() => setStatusOpen(false)} />}
       <AutoCompactModal key={active.sessionId} sessionId={active.sessionId} chat={chat} enabled={!!project?.autoCompact} onCompact={() => send('/compact', false, 'auto-compact')} onDecline={compactDeclined} onHandoff={() => setHandoffTrigger('auto-compact-modal')} />
       {cold && chat.context && <ColdCacheModal ctx={chat.context} onSend={sendCold} onCancel={() => setCold(false)} onCompact={() => { setCold(false); send('/compact', false, 'auto-compact'); }} onHandoff={() => { setCold(false); setHandoffTrigger('cold-cache'); }} />}
+      {auditOpen && project && <ContextAuditModal project={project} sessionId={active.sessionId} chat={chat} onClose={() => setAuditOpen(false)} />}
       {handoffTrigger && <HandoffModal projectId={active.projectId} sessionId={active.sessionId} name={name} trigger={handoffTrigger} onClose={() => setHandoffTrigger(null)} />}
 
       <div className="relative border-t border-zinc-800/70 bg-zinc-950 p-3">
+        {!chat.plan && !project?.bypass && !planHintOff && !busy && suggestPlanMode(text) && (
+          <div className="mb-2 flex items-center justify-between gap-3 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-200">
+            <span>Tarefa grande: planejar antes de editar costuma evitar retrabalho. Ligar o modo plano?</span>
+            <span className="flex shrink-0 gap-1.5">
+              <button className="rounded-md bg-sky-200 px-2.5 py-1 font-medium text-sky-950 hover:bg-sky-100" onClick={() => project && void api.setPlan(project.id, active.sessionId, true).catch(() => {})}>Ligar plano</button>
+              <button className="rounded-md px-2 py-1 text-sky-300/80 hover:text-sky-100" onClick={() => setPlanHintOff(true)}>Agora não</button>
+            </span>
+          </div>
+        )}
         {menuOpen && <SlashMenu items={matches} sel={Math.min(sel, matches.length - 1)} lean={!!project?.lean} onPick={pick} onHover={setSel} />}
         <div className="flex flex-col rounded-xl border border-zinc-800 bg-zinc-900/90 transition-colors focus-within:border-zinc-700">
           <AttachedFilesPill sessionId={active.sessionId} connectionId={connId} />

@@ -47,13 +47,17 @@ describe('Claude Code via the Agent SDK', { skip: !live && 'set CCUI_LIVE=1 (npm
   test('sends a message and gets the reply, turn totals and context usage back', { timeout: TURN_MS }, async () => {
     const s = await rt.open({ ...base, sessionId });
     try {
-      const evs = await turn(s.events[Symbol.asyncIterator](), () => s.send('Reply with exactly the word PONG and nothing else.'));
+      const it = s.events[Symbol.asyncIterator]();
+      const evs = await turn(it, () => s.send('Reply with exactly the word PONG and nothing else.'));
       assert.match(texts(evs), /PONG/);
       const done = evs.find((e) => e.type === 'turn.completed');
       assert.ok(done && done.type === 'turn.completed' && done.outputTokens > 0, 'turn.completed with output tokens');
       const ctx = evs.find((e) => e.type === 'context.usage');
       assert.ok(ctx && ctx.type === 'context.usage' && ctx.totalTokens > 0 && ctx.maxTokens > 0, 'context.usage after the turn');
       assert.ok(!evs.some((e) => e.type === 'error'), `no error: ${JSON.stringify(evs.filter((e) => e.type === 'error'))}`);
+      // the fixed load (system prompt, tools, CLAUDE.md...) follows the first context.usage, once per process
+      const next = await it.next();
+      assert.ok(!next.done && next.value.type === 'context.baseline' && next.value.baseline.tokens > 0, `context.baseline after the first turn: ${JSON.stringify(next)}`);
     } finally { await s.close(); }
   });
 
@@ -100,6 +104,24 @@ describe('SessionHub end to end (real Claude Code, routing on)', { skip: !live &
       assert.deepEqual(order.slice(0, 3), ['routing.started', 'model.routed', 'user.message']);
       assert.ok(order.includes('turn.completed'));
       assert.match(evs.flatMap((e) => (e.type === 'message.completed' ? [e.text] : [])).join(' '), /PONG/);
+    } finally { await hub.shutdown(); }
+  });
+});
+
+describe('Plan mode (real Claude Code)', { skip: !live && 'set CCUI_LIVE=1 (npm run test:live)' }, () => {
+  test('a plan is proposed through ExitPlanMode; approving it leaves plan mode', { timeout: TURN_MS }, async () => {
+    const hub = new SessionHub(() => rt, () => base);
+    const id = randomUUID();
+    const r = recorder();
+    await hub.attach(r.client, id);
+    try {
+      assert.equal(await hub.setPlanMode(id, true), 'ok');
+      assert.equal(await hub.send(id, 'Plan (do not implement) how to add a file named hello.txt containing "hi" to this folder, then present the plan with ExitPlanMode.'), 'ok');
+      const req = await r.waitFor((e) => e.type === 'permission.requested' || e.type === 'error', TURN_MS);
+      assert.ok(req.type === 'permission.requested' && req.toolName === 'ExitPlanMode', `expected ExitPlanMode, got ${JSON.stringify(req)}`);
+      assert.equal(typeof (req.input as { plan?: unknown }).plan, 'string');
+      hub.answerPermission(r.client, id, req.reqId, true);
+      await r.waitFor((e) => e.type === 'plan.mode' && !e.on, 10_000);
     } finally { await hub.shutdown(); }
   });
 });

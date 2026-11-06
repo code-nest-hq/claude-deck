@@ -270,6 +270,18 @@ export function buildApi({ store, hub, conns }: Deps) {
     } catch (e) { return bad(c, (e as Error).message); }
   });
 
+  // plan-first toggle (the chip next to the input, or the hint for a big prompt)
+  api.post('/projects/:id/sessions/:sid/plan', async (c) => {
+    const sid = uuidSchema.safeParse(c.req.param('sid'));
+    if (!project(c.req.param('id')) || !sid.success) return c.json({ error: 'projeto/sessão desconhecido' }, 404);
+    const b = await body(c, z.object({ on: z.boolean() }));
+    if (!b) return c.json({ error: 'invalid body' }, 400);
+    try {
+      if (await hub.setPlanMode(sid.data, b.on) === 'busy') return c.json({ error: 'wait for the current turn to finish' }, 409);
+      return c.json({ plan: b.on });
+    } catch (e) { return bad(c, (e as Error).message); }
+  });
+
   // Status modal: effective settings resolved exactly like the process opens (openSpecFor)
   api.get('/projects/:id/sessions/:sid/status', (c) => {
     const sid = uuidSchema.safeParse(c.req.param('sid'));

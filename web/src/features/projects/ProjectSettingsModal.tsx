@@ -52,7 +52,7 @@ export function ProjectSettingsModal({ projectId, onClose }: { projectId: string
           />
           <Toggle
             on={!!p.autoCompact} label="Auto-compact" onClick={() => patch({ autoCompact: !p.autoCompact })}
-            desc="After a reply, if context passes 60% or 150k tokens, asks whether to run /compact. Also asks before sending after a 5+ min pause on a big context (cold cache)."
+            desc="After a reply, if context passes 60% or 100k tokens, asks whether to run /compact. Also asks before sending after a 5+ min pause on a big context (cold cache)."
           />
           <Toggle
             on={!!p.bypass} tone="rose" label="Bypass permissions" onClick={() => { if (p.bypass || confirm(`Turn on permission bypass for "${p.name}"? Claude Code will be able to run commands and edit files without asking.`)) void patch({ bypass: !p.bypass }); }}

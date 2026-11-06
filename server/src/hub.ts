@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { ZERO_TOTALS, type BgTask, type ClaudeEvent, type EventBody, type McpAction, type Model, type ModelUsage, type PendingPermission, type ServerMsg, type SessionState, type UsageTotals } from '@ccui/shared';
+import { ZERO_TOTALS, usageCostUsd, type BgTask, type ClaudeEvent, type EventBody, type McpAction, type Model, type ModelUsage, type PendingPermission, type ServerMsg, type SessionState, type UsageTotals } from '@ccui/shared';
 import { logError } from './logs';
 import { recordSession } from './session-log';
 import type { Classification, ClaudeRuntime, LiveSession, OpenOptions } from './runtime/types';
@@ -34,6 +34,8 @@ interface Entry {
   ctxTokens?: number; // context size after the last turn (context.usage)
   turnEndedAt?: number; // when the last turn finished, to tell whether the prompt cache is still warm
   compacting?: boolean; // a compact is in flight; the SDK re-sends status 'compacting' every ~30s, only the first counts
+  subUsage?: Map<string, Extract<EventBody, { type: 'subagent.usage' }>>; // this turn's subagent API messages by id (a message arrives once per content block)
+  plan?: boolean; // plan mode on (applied to the live process, or when it opens)
   compactBy?: 'user' | 'deck-auto'; // who asked for the /compact in flight; none when its 'started' arrives = the CLI's own auto-compact
 }
 
@@ -100,7 +102,7 @@ export class SessionHub {
       e.prevModelUsage = stored.modelUsage; // idem por-modelo, pro 1º turno desta execução calcular o delta certo (só o turno, não a sessão)
     }
     // estado lido DEPOIS do await: eventos emitidos durante a leitura já foram enviados a `c` e o cliente os ignora até hidratar
-    c.send({ type: 'snapshot', sessionId: id, history, state: e.state, lastSeq: e.seq, totals: e.totals ?? ZERO_TOTALS, pending: [...e.pending.values()], bgTasks: e.bgTasks });
+    c.send({ type: 'snapshot', sessionId: id, history, state: e.state, lastSeq: e.seq, totals: e.totals ?? ZERO_TOTALS, pending: [...e.pending.values()], bgTasks: e.bgTasks, plan: !!e.plan });
   }
 
   async attach(c: Client, id: string, afterSeq?: number) {
@@ -146,7 +148,7 @@ export class SessionHub {
     }
     if (!e.live) {
       try {
-        e.live = await this.runtimeFor(id).open({ ...spec, sessionId: id });
+        e.live = await this.runtimeFor(id).open({ ...spec, permissionMode: e.plan && spec.permissionMode !== 'bypassPermissions' ? 'plan' : spec.permissionMode, sessionId: id });
       } catch (err) {
         this.emit(id, e, { type: 'error', code: 'runtime', message: (err as Error).message });
         this.setState(id, e, 'idle');
@@ -229,6 +231,17 @@ export class SessionHub {
     return e.live.reload();
   }
 
+  // plan-first toggle. Refused mid-turn (the mode would change under a running turn) and in bypass projects (the SDK skips the gate there)
+  async setPlanMode(id: string, on: boolean): Promise<'ok' | 'busy'> {
+    if (this.spec(id).permissionMode === 'bypassPermissions') throw new Error('plan mode is not available in bypass projects');
+    const e = this.entry(id);
+    if (e.state === 'running' || e.state === 'awaiting_permission') return 'busy';
+    recordSession(id, 'action', { action: on ? 'plan.on' : 'plan.off' });
+    if (e.live) await e.live.setPermissionMode(on ? 'plan' : 'default');
+    this.emit(id, e, { type: 'plan.mode', on });
+    return 'ok';
+  }
+
   // background task modal: null = no live process (the tasks died with it)
   async bgOutput(id: string, taskId: string) {
     this.spec(id);
@@ -251,6 +264,7 @@ export class SessionHub {
         if (b.phase === 'started' && e.compacting) continue;
         e.compacting = b.phase === 'started';
       }
+      if (b.type === 'subagent.usage') { (e.subUsage ??= new Map()).set(b.messageId, b); continue; }
       const ev = this.emit(id, e, b);
       if (ev.type === 'error' && ev.code === 'exit') crash = ev;
     }
@@ -291,9 +305,9 @@ export class SessionHub {
   }
 
   /** only a client attached to the session may answer its prompts */
-  answerPermission(c: Client, id: string, reqId: string, allow: boolean, updatedInput?: Record<string, unknown>) {
+  answerPermission(c: Client, id: string, reqId: string, allow: boolean, updatedInput?: Record<string, unknown>, always?: boolean) {
     if (!c.sessions.has(id)) return;
-    this.entries.get(id)?.live?.answerPermission(reqId, allow, updatedInput);
+    this.entries.get(id)?.live?.answerPermission(reqId, allow, updatedInput, always);
   }
 
   /** ends the live process (the session stays resumable); the next send reopens it with the current spec */
@@ -323,6 +337,11 @@ export class SessionHub {
       const cumulative = body.modelUsage;
       body = { ...body, modelUsage: diffModelUsage(e.prevModelUsage ?? {}, cumulative) };
       e.prevModelUsage = cumulative;
+      if (e.subUsage?.size) {
+        const us = [...e.subUsage.values()];
+        body = { ...body, subagent: { costUsd: us.reduce((s, u) => s + usageCostUsd(u.model, u), 0), tokens: us.reduce((s, u) => s + u.input + u.output + u.cacheCreation + u.cacheRead, 0) } };
+        e.subUsage.clear();
+      }
     }
     const ev = { ...body, sessionId: id, seq: ++e.seq, ts: Date.now() } as ClaudeEvent;
     e.buffer.push(ev);
@@ -336,7 +355,7 @@ export class SessionHub {
     for (const c of e.clients) c.send({ type: 'event', event: ev });
     switch (body.type) {
       case 'permission.requested':
-        e.pending.set(body.reqId, { reqId: body.reqId, toolName: body.toolName, input: body.input });
+        e.pending.set(body.reqId, { reqId: body.reqId, toolName: body.toolName, input: body.input, alwaysRules: body.alwaysRules });
         this.setState(id, e, 'awaiting_permission');
         break;
       case 'permission.resolved':
@@ -354,6 +373,9 @@ export class SessionHub {
         break;
       case 'context.usage':
         e.ctxTokens = body.totalTokens;
+        break;
+      case 'plan.mode':
+        e.plan = body.on;
         break;
       case 'turn.completed':
         e.turnEndedAt = Date.now();
